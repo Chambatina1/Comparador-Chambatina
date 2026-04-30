@@ -41,8 +41,6 @@ interface CubaProduct {
   notes: string;
 }
 
-export async function POST(request: NextRequest) {
-
 // Debug endpoint to test Bing from Render
 export async function GET() {
   try {
