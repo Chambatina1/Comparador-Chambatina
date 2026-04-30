@@ -35,7 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { proxyFetch, PROXY_URL, CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
+import { apiFetch, PROXY_URL, CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
 import { PROVINCIAS } from "@/lib/platforms";
 
 interface Listing {
@@ -69,11 +69,11 @@ export default function MarketplacePage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await proxyFetch("/categories");
+        const res = await apiFetch("/api/categories");
         if (res.ok && !cancelled) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
-            setCategories(data);
+            setCategories(data.map((c: any) => c.id || c));
           }
         }
       } catch {
@@ -94,7 +94,7 @@ export default function MarketplacePage() {
     (async () => {
       setLoading(true);
       try {
-        const res = await proxyFetch(`/listings?${params.toString()}`);
+        const res = await apiFetch(`/api/marketplace?${params.toString()}`);
         if (!cancelled) {
           if (res.ok) {
             const data = await res.json();

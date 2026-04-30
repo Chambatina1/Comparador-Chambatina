@@ -32,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { proxyFetch, PROXY_URL, CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
+import { apiFetch, PROXY_URL, CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
 import { PROVINCIAS } from "@/lib/platforms";
 
 interface Mipyme {
@@ -68,7 +68,7 @@ export default function MipymesPage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await proxyFetch("/categories");
+        const res = await apiFetch("/api/categories");
         if (res.ok && !cancelled) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
@@ -93,7 +93,7 @@ export default function MipymesPage() {
     (async () => {
       setLoading(true);
       try {
-        const res = await proxyFetch(`/mipymes?${params.toString()}`);
+        const res = await apiFetch(`/api/mipymes?${params.toString()}`);
         if (!cancelled) {
           if (res.ok) {
             const data = await res.json();

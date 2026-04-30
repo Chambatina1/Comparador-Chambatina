@@ -19,7 +19,7 @@ import { useParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { proxyFetch, PROXY_URL, CATEGORY_LABELS } from "@/lib/proxy";
+import { apiFetch, PROXY_URL, CATEGORY_LABELS } from "@/lib/proxy";
 
 interface Listing {
   id: string;
@@ -49,7 +49,7 @@ export default function ListingDetailPage() {
     const fetchListing = async () => {
       setLoading(true);
       try {
-        const res = await proxyFetch(`/listings/${id}`);
+        const res = await apiFetch(`/api/marketplace/${id}`);
         if (res.ok) {
           const data = await res.json();
           setListing(data.listing || data.data || data);

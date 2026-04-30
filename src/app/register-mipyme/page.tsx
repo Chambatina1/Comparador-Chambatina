@@ -34,7 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { proxyFetch, proxyUpload, CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
+import { apiFetch, apiUpload, CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
 import { PROVINCIAS } from "@/lib/platforms";
 import { toast } from "@/hooks/use-toast";
 
@@ -64,7 +64,7 @@ export default function RegisterMipymePage() {
   const [schedule, setSchedule] = useState("");
 
   useEffect(() => {
-    proxyFetch("/categories")
+    apiFetch("/api/categories")
       .then((res) => {
         if (res.ok) return res.json();
       })
@@ -130,7 +130,7 @@ export default function RegisterMipymePage() {
       if (schedule.trim()) formData.append("schedule", schedule.trim());
       if (logoFile) formData.append("logo", logoFile);
 
-      const res = await proxyUpload("/mipyme", formData);
+      const res = await apiUpload("/api/register-mipyme", formData);
       if (res.ok) {
         toast({
           title: "¡Negocio registrado!",

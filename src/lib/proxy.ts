@@ -1,19 +1,21 @@
 // Centralized proxy URL config
+// The PROXY_URL is used server-side for API routes and client-side for images only
 export const PROXY_URL =
   process.env.NEXT_PUBLIC_PROXY_URL ||
   "https://blind-workstation-trucks-hired.trycloudflare.com";
 
-export async function proxyFetch(path: string, options?: RequestInit) {
-  const res = await fetch(`${PROXY_URL}${path}`, {
+// Client-side fetch goes through our own Next.js API routes (no direct proxy calls from browser)
+export async function apiFetch(path: string, options?: RequestInit) {
+  const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
   return res;
 }
 
-// For multipart form data (file uploads), no Content-Type header
-export async function proxyUpload(path: string, formData: FormData) {
-  const res = await fetch(`${PROXY_URL}${path}`, {
+// For multipart form data uploads (goes through our API route)
+export async function apiUpload(path: string, formData: FormData) {
+  const res = await fetch(path, {
     method: "POST",
     body: formData,
   });

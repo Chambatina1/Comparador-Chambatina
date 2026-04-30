@@ -29,7 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { proxyFetch, proxyUpload, CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
+import { apiFetch, apiUpload, CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
 import { PROVINCIAS } from "@/lib/platforms";
 import { toast } from "@/hooks/use-toast";
 
@@ -54,7 +54,7 @@ export default function PublishPage() {
   const [sellerName, setSellerName] = useState("");
 
   useEffect(() => {
-    proxyFetch("/categories")
+    apiFetch("/api/categories")
       .then((res) => {
         if (res.ok) return res.json();
       })
@@ -135,7 +135,7 @@ export default function PublishPage() {
         formData.append("photos", photo);
       });
 
-      const res = await proxyUpload("/listing", formData);
+      const res = await apiUpload("/api/publish", formData);
       if (res.ok) {
         toast({
           title: "¡Anuncio publicado!",
