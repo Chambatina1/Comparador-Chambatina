@@ -3,7 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const PROXY_URL = process.env.PROXY_URL || "https://cubafinder-search.loca.lt";
+const PROXY_URLS = [
+  process.env.PROXY_URL,
+  "https://blind-workstation-trucks-hired.trycloudflare.com",
+].filter(Boolean);
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,55 +18,54 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Escribe el producto que buscas" }, { status: 400 });
     }
 
-    console.log("[API] Proxying search:", query, "to", PROXY_URL);
+    console.log("[API] Search:", query.trim());
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 55000);
+    // Try proxy URLs
+    for (const proxyUrl of PROXY_URLS) {
+      try {
+        console.log("[API] Trying proxy:", proxyUrl);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
 
-    try {
-      const response = await fetch(`${PROXY_URL}/search`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-        body: JSON.stringify({ query: query.trim() }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        console.log("[API] Proxy error:", response.status, response.statusText);
-        return NextResponse.json({
-          query: query.trim(),
-          results: [],
-          totalResults: 0,
-          stats: { provinces: [], withPhone: 0, withDate: 0, pricedCount: 0, minPrice: 0, method: "proxy-error" },
+        const response = await fetch(`${proxyUrl}/search`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+          },
+          body: JSON.stringify({ query: query.trim() }),
+          signal: controller.signal,
         });
+
+        clearTimeout(timeout);
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log("[API] Proxy returned", data.totalResults, "results via", proxyUrl);
+          return NextResponse.json(data);
+        } else {
+          const text = await response.text().catch(() => "");
+          console.log("[API] Proxy", proxyUrl, "status:", response.status, "body:", text.substring(0, 200));
+        }
+      } catch (fetchError: any) {
+        console.log("[API] Proxy", proxyUrl, "failed:", fetchError.message?.substring(0, 100));
       }
-
-      const data = await response.json();
-      console.log("[API] Proxy returned", data.totalResults, "results");
-      return NextResponse.json(data);
-    } catch (fetchError: any) {
-      clearTimeout(timeout);
-      console.log("[API] Proxy fetch error:", fetchError.message);
-
-      // Fallback: try Bing search directly from Render
-      console.log("[API] Trying Bing fallback...");
-      const bingResults = await searchBingFallback(query.trim());
-      if (bingResults.results.length > 0) {
-        return NextResponse.json(bingResults);
-      }
-
-      return NextResponse.json({
-        query: query.trim(),
-        results: [],
-        totalResults: 0,
-        stats: { provinces: [], withPhone: 0, withDate: 0, pricedCount: 0, minPrice: 0, method: "error" },
-      });
     }
+
+    // Fallback: try Bing search directly
+    console.log("[API] All proxies failed, trying Bing fallback...");
+    const bingResults = await searchBingFallback(query.trim());
+    if (bingResults.results.length > 0) {
+      console.log("[API] Bing fallback returned", bingResults.totalResults, "results");
+      return NextResponse.json(bingResults);
+    }
+
+    return NextResponse.json({
+      query: query.trim(),
+      results: [],
+      totalResults: 0,
+      stats: { provinces: [], withPhone: 0, withDate: 0, pricedCount: 0, minPrice: 0, method: "no-results" },
+    });
   } catch (error) {
     console.error("[API] Fatal error:", error);
     return NextResponse.json({
