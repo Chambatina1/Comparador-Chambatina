@@ -79,8 +79,17 @@ interface CubaProduct {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { query } = body;
+    let body: any;
+    try {
+      body = await request.json();
+    } catch (parseError) {
+      console.error("[CubaFinder] Failed to parse body:", parseError);
+      return NextResponse.json({ error: "Error al leer la solicitud" }, { status: 400 });
+    }
+
+    const query = body?.query || "";
+    console.log("[CubaFinder] Raw body:", JSON.stringify(body));
+    console.log("[CubaFinder] Query received:", query);
 
     if (!query || query.trim().length < 2) {
       return NextResponse.json({ error: "Escribe el producto que buscas" }, { status: 400 });
@@ -124,53 +133,60 @@ export async function POST(request: NextRequest) {
 
 // ===== BUSCAR EN TODOS LOS GRUPOS "VENTAS" DE CUBA =====
 async function searchAllVentasGroups(query: string): Promise<CubaProduct[]> {
-  const zai = await ZAI.create();
+  let zai;
+  try {
+    zai = await ZAI.create();
+    console.log("[CubaFinder] SDK created OK");
+  } catch (e) {
+    console.error("[CubaFinder] SDK create FAILED:", e);
+    return [];
+  }
+
   const allProducts: CubaProduct[] = [];
 
   // Construir queries apuntando a grupos "Ventas [lugar]" en Facebook
-  const searchQueries: string[] = [];
+  const searchQueries: string[] = [
+    `${query} grupo Ventas Cuba Facebook precio telefono`,
+    `${query} "Ventas La Habana" precio`,
+    `${query} "Ventas Pinar del Rio" precio`,
+    `${query} "Ventas Holguin" OR "Ventas Santiago" precio`,
+    `${query} "Ventas Villa Clara" OR "Ventas Camaguey" precio`,
+    `${query} "Ventas Matanzas" OR "Ventas Granma" precio`,
+    `${query} "Ventas Las Tunas" OR "Ventas Ciego" precio`,
+    `${query} Revolico Cuba precio`,
+  ];
 
-  // Query 1: General Cuba + Facebook
-  searchQueries.push(`"${query}" grupo Ventas Cuba Facebook precio teléfono`);
+  console.log(`[CubaFinder] Ejecutando ${searchQueries.length} búsquedas...`);
 
-  // Query 2-5: Provincias principales (4 grupos más grandes)
-  searchQueries.push(`"${query}" "Ventas La Habana" Facebook precio`);
-  searchQueries.push(`"${query}" "Ventas Santiago" OR "Ventas Holguín" Facebook precio`);
-  searchQueries.push(`"${query}" "Ventas Villa Clara" OR "Ventas Camagüey" Facebook precio`);
-  searchQueries.push(`"${query}" "Ventas Pinar" OR "Ventas Matanzas" Facebook precio`);
-
-  // Query 6: Province medias
-  searchQueries.push(`"${query}" "Ventas Granma" OR "Ventas Las Tunas" OR "Ventas Ciego" Facebook precio`);
-
-  // Query 7: Revolico + otros sitios
-  searchQueries.push(`"${query}" Revolico Cuba precio teléfono`);
-
-  // Query 8: Marketplace + grupos adicionales
-  searchQueries.push(`"${query}" marketplace Cuba Facebook grupo ventas`);
-
-  console.log(`[CubaFinder] Ejecutando ${searchQueries.length} búsquedas en grupos Ventas...`);
-
-  // Ejecutar en paralelo
+  // Ejecutar en paralelo con logging detallado
   let allResults: any[] = [];
   const batchSize = 4;
 
   for (let i = 0; i < searchQueries.length; i += batchSize) {
     const batch = searchQueries.slice(i, i + batchSize);
-    console.log(`[CubaFinder] Lote ${Math.floor(i / batchSize) + 1}`);
 
     const batchResults = await Promise.allSettled(
       batch.map(async (q) => {
         try {
+          console.log("[CubaFinder] Searching:", q);
           const results = await zai.functions.invoke("web_search", { query: q, num: 10 });
+          const count = Array.isArray(results) ? results.length : 0;
+          console.log(`[CubaFinder] Got ${count} results for: ${q.substring(0, 60)}`);
           return results || [];
-        } catch {
+        } catch (e) {
+          console.error(`[CubaFinder] Search error for "${q.substring(0, 50)}":`, e);
           return [];
         }
       })
     );
 
     for (const r of batchResults) {
-      if (r.status === "fulfilled" && Array.isArray(r.value)) allResults.push(...r.value);
+      if (r.status === "fulfilled" && Array.isArray(r.value) && r.value.length > 0) {
+        console.log(`[CubaFinder] Adding ${r.value.length} results from batch`);
+        allResults.push(...r.value);
+      } else if (r.status === "rejected") {
+        console.error("[CubaFinder] Batch rejected:", r.reason);
+      }
     }
   }
 
