@@ -63,6 +63,51 @@ export const platforms: Platform[] = [
     searchUrlTemplate: "https://listado.mercadolibre.com/{query}",
     logo: "🏪",
   },
+  {
+    id: "samsung",
+    name: "Samsung",
+    domain: "samsung.com",
+    color: "#1428A0",
+    bgColor: "#1428A014",
+    searchUrlTemplate: "https://www.samsung.com/us/search/?searchvalue={query}",
+    logo: "📱",
+  },
+  {
+    id: "ebay",
+    name: "eBay",
+    domain: "ebay.com",
+    color: "#E53238",
+    bgColor: "#E5323814",
+    searchUrlTemplate: "https://www.ebay.com/sch/i.html?_nkw={query}",
+    logo: "🏷️",
+  },
+  {
+    id: "walmart",
+    name: "Walmart",
+    domain: "walmart.com",
+    color: "#0071DC",
+    bgColor: "#0071DC14",
+    searchUrlTemplate: "https://www.walmart.com/search?q={query}",
+    logo: "🛒",
+  },
+  {
+    id: "bestbuy",
+    name: "Best Buy",
+    domain: "bestbuy.com",
+    color: "#0046BE",
+    bgColor: "#0046BE14",
+    searchUrlTemplate: "https://www.bestbuy.com/site/searchpage.jsp?st={query}",
+    logo: "🏷️",
+  },
+  {
+    id: "target",
+    name: "Target",
+    domain: "target.com",
+    color: "#CC0000",
+    bgColor: "#CC000014",
+    searchUrlTemplate: "https://www.target.com/s?searchTerm={query}",
+    logo: "🎯",
+  },
 ];
 
 export function getPlatformById(id: string): Platform | undefined {
@@ -75,12 +120,14 @@ export function detectPlatformFromUrl(url: string): Platform | undefined {
 }
 
 export const trendingSearches = [
+  "EcoFlow Delta 2",
   "AirPods Pro",
   "Camiseta Nike",
-  "Funda iPhone 15",
+  "iPhone 15",
   "Zapatillas Adidas",
   "Smartwatch",
   "Cargador USB-C",
-  "Mochila Laptop",
   "Auriculares Bluetooth",
+  "Xiaomi Robot Vacuum",
+  "Laptop Gamer",
 ];
