@@ -4,444 +4,292 @@ import ZAI from "z-ai-web-dev-sdk";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-interface ProductResult {
+// Grupos de ventas por provincia y municipio principales de Cuba
+// Los grupos reales de Facebook se llaman "Ventas [nombre]"
+const GRUPOS_VENTAS: string[] = [
+  // Provincias
+  "Ventas La Habana", "Ventas Pinar del Río", "Ventas Artemisa", "Ventas Mayabeque",
+  "Ventas Matanzas", "Ventas Cienfuegos", "Ventas Villa Clara", "Ventas Sancti Spíritus",
+  "Ventas Ciego de Ávila", "Ventas Camagüey", "Ventas Las Tunas", "Ventas Holguín",
+  "Ventas Granma", "Ventas Santiago de Cuba", "Ventas Guantánamo",
+  // Municipios principales
+  "Ventas Cárdenas", "Ventas Santa Clara", "Ventas Bayamo", "Ventas Palma Soriano",
+  "Ventas Manzanillo", "Ventas Morón", "Ventas Florida", "Ventas Nuevitas",
+  "Ventas Gibara", "Ventas Puerto Padre", "Ventas Contramaestre", "Ventas San Luis",
+  "Ventas Güines", "Ventas Batabanó", "Ventas Artemisa", "Ventas Mariel",
+  "Ventas Cumanayagua", "Ventas Trinidad", "Ventas Remedios", "Ventas Placetas",
+  "Ventas Sancti Spíritus", "Ventas Jatibonico", "Ventas Florida Camagüey",
+  "Ventas Baracoa", "Ventas Moa", "Ventas Sagua de Tánamo", "Ventas San Antonio",
+  "Ventas Bejucal", "Ventas Quivicán", "Ventas San José de las Lajas",
+];
+
+const PROVINCIAS_MAP: Record<string, string> = {
+  "habana": "La Habana", "la habana": "La Habana", "havana": "La Habana",
+  "pinar": "Pinar del Río", "pinar del rio": "Pinar del Río", "pinar del río": "Pinar del Río",
+  "artemisa": "Artemisa", "mayabeque": "Mayabeque",
+  "matanzas": "Matanzas", "cardenas": "Matanzas", "cárdenas": "Matanzas",
+  "varadero": "Matanzas", "cienfuegos": "Cienfuegos", "cumanayagua": "Cienfuegos",
+  "trinidad": "Sancti Spíritus",
+  "villa clara": "Villa Clara", "santa clara": "Villa Clara", "remedios": "Villa Clara",
+  "placetas": "Villa Clara", "sagua": "Villa Clara",
+  "sancti": "Sancti Spíritus", "sancti spiritus": "Sancti Spíritus", "ssc": "Sancti Spíritus",
+  "ciego": "Ciego de Ávila", "ciego de avila": "Ciego de Ávila", "morón": "Ciego de Ávila",
+  "camaguey": "Camagüey", "camagüey": "Camagüey", "florida": "Camagüey",
+  "nuevitas": "Camagüey", "esmeralda": "Camagüey",
+  "las tunas": "Las Tunas", "puerto padre": "Las Tunas", "jobabo": "Las Tunas",
+  "holguin": "Holguín", "holguín": "Holguín", "gibara": "Holguín", "moa": "Holguín",
+  "banes": "Holguín", "sagua de tanamo": "Holguín", "sagua de tánamo": "Holguín",
+  "granma": "Granma", "bayamo": "Granma", "manzanillo": "Granma",
+  "jucaro": "Granma", "niquero": "Granma",
+  "santiago": "Santiago de Cuba", "santiago de cuba": "Santiago de Cuba",
+  "palma": "Santiago de Cuba", "palma soriano": "Santiago de Cuba",
+  "contramaestre": "Santiago de Cuba", "san luis": "Santiago de Cuba",
+  "mella": "Santiago de Cuba", "guama": "Santiago de Cuba",
+  "guantanamo": "Guantánamo", "guantánamo": "Guantánamo", "baracoa": "Guantánamo",
+  "isla": "Isla de la Juventud", "nueva gerona": "Isla de la Juventud",
+  "güines": "Mayabeque", "guines": "Mayabeque",
+  "batabano": "Mayabeque", "batabanó": "Mayabeque",
+  "san jose": "Mayabeque", "san josé": "Mayabeque", "bejucal": "Mayabeque",
+  "quivican": "Mayabeque", "quivicán": "Mayabeque", "melena": "Mayabeque",
+  "mariel": "Artemisa", "san antonio": "Artemisa", "guanajay": "Artemisa",
+  "caimito": "Artemisa", "alquízar": "Artemisa",
+  "san cristobal": "Pinar del Río", "san cristóbal": "Pinar del Río",
+  "consolacion": "Pinar del Río", "consolación del sur": "Pinar del Río",
+  "viñales": "Pinar del Río", "vinales": "Pinar del Río",
+  "los palacios": "Pinar del Río", "sandino": "Pinar del Río",
+  "jatibonico": "Camagüey", "sibanicú": "Camagüey", "sibanicu": "Camagüey",
+  "vertientes": "Camagüey", "minas": "Camagüey", "najasa": "Camagüey",
+};
+
+interface CubaProduct {
   id: string;
   name: string;
   price: number;
   priceFormatted: string;
-  platform: string;
-  platformName: string;
+  currency: string;
   url: string;
-  image: string;
-  rating: number;
+  phone: string;
+  province: string;
+  municipality: string;
+  group: string;
+  publishDate: string;
   isBestPrice: boolean;
+  notes: string;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { query, url } = body;
+    const { query } = body;
 
-    if (!query && !url) {
-      return NextResponse.json(
-        { error: "Escribe algo, pega un link o sube una foto" },
-        { status: 400 }
-      );
+    if (!query || query.trim().length < 2) {
+      return NextResponse.json({ error: "Escribe el producto que buscas" }, { status: 400 });
     }
 
-    let searchQuery = (query || "").trim();
-    let sourceUrl = (url || "").trim();
+    const searchQuery = query.trim();
+    console.log("[CubaFinder] Buscando:", searchQuery);
 
-    // If user pasted a URL, extract search terms from it
-    if (sourceUrl && !searchQuery) {
-      try {
-        const urlObj = new URL(sourceUrl);
-        const pathParts = urlObj.pathname
-          .replace(/[-_]/g, " ")
-          .replace(/\/dp\/|\/item\/|\/p\/|\/product\//gi, " ")
-          .split("/")
-          .filter((w) => w.length > 2);
-        searchQuery = pathParts.slice(0, 6).join(" ");
-      } catch {
-        searchQuery = sourceUrl.replace(/https?:\/\/(www\.)?/i, "").split("/")[1] || "";
-      }
+    const products = await searchAllVentasGroups(searchQuery);
+
+    // Marcar mejor precio
+    const priced = products.filter((p) => p.price > 0);
+    if (priced.length > 0) {
+      const min = Math.min(...priced.map((p) => p.price));
+      for (const p of products) p.isBestPrice = p.price > 0 && p.price === min;
     }
 
-    if (!searchQuery || searchQuery.length < 2) {
-      return NextResponse.json(
-        { error: "No se pudo identificar el producto. Intenta con una descripción más clara." },
-        { status: 400 }
-      );
-    }
-
-    const platformLinks = buildPlatformLinks(searchQuery);
-
-    // Use AI SDK to search and extract real product data with prices
-    let products: ProductResult[] = [];
-
-    try {
-      products = await searchWithAI(searchQuery);
-    } catch (error) {
-      console.error("[Search] AI search failed:", error);
-      // Fallback to DDG Lite scraping
-      try {
-        const ddgResults = await searchDuckDuckGoLite(searchQuery);
-        products = ddgResults.map((r: any) => {
-          const detectedPlatform = detectPlatform(r.url, r.title);
-          const priceInfo = extractPrice(r.title + " " + r.snippet);
-          return {
-            id: `ddg-${hashStr(r.url)}`,
-            name: cleanTitle(r.title),
-            price: priceInfo.amount,
-            priceFormatted: priceInfo.amount > 0 ? `$${priceInfo.amount.toFixed(2)}` : "Ver precio en tienda",
-            platform: detectedPlatform.platform,
-            platformName: detectedPlatform.name,
-            url: r.url,
-            image: r.imageUrl || "",
-            rating: 0,
-            isBestPrice: false,
-          };
-        });
-      } catch (e2) {
-        console.error("[Search] DDG fallback also failed:", e2);
-      }
-    }
-
-    // Deduplicate
-    const seen = new Set<string>();
-    const uniqueProducts = products.filter((p) => {
-      try {
-        const key = new URL(p.url).hostname + new URL(p.url).pathname;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-
-    // Mark best price
-    const pricedProducts = uniqueProducts.filter((p) => p.price > 0);
-    if (pricedProducts.length > 0) {
-      const minPrice = Math.min(...pricedProducts.map((p) => p.price));
-      for (const p of uniqueProducts) {
-        p.isBestPrice = p.price > 0 && p.price === minPrice;
-      }
-    }
-
-    // Sort: with prices first, cheapest first
-    const sorted = uniqueProducts.sort((a, b) => {
+    // Ordenar: más barato primero
+    const sorted = products.sort((a, b) => {
       if (a.price > 0 && b.price === 0) return -1;
       if (a.price === 0 && b.price > 0) return 1;
       if (a.price > 0 && b.price > 0) return a.price - b.price;
       return 0;
     });
 
-    const summary = generateSummary(sorted, searchQuery);
+    const provinces = [...new Set(products.filter((p) => p.province).map((p) => p.province))];
+    const withPhone = products.filter((p) => p.phone).length;
+    const withDate = products.filter((p) => p.publishDate).length;
 
     return NextResponse.json({
       query: searchQuery,
       results: sorted,
-      platformLinks,
-      summary,
       totalResults: sorted.length,
+      stats: { provinces, withPhone, withDate, pricedCount: priced.length, minPrice: priced.length > 0 ? Math.min(...priced.map((p) => p.price)) : 0 },
     });
   } catch (error) {
-    console.error("[Search] Unexpected error:", error);
-    const fallbackLinks = buildPlatformLinks("producto");
-    return NextResponse.json({
-      query: "",
-      results: [],
-      platformLinks: fallbackLinks,
-      summary: "Hubo un error en la búsqueda. Usa los enlaces de abajo para buscar directamente.",
-      totalResults: 0,
-    });
+    console.error("[CubaFinder] Error:", error);
+    return NextResponse.json({ query: "", results: [], totalResults: 0, stats: { provinces: [], withPhone: 0, withDate: 0, pricedCount: 0, minPrice: 0 } });
   }
 }
 
-// ===== AI-POWERED SEARCH =====
-async function searchWithAI(query: string): Promise<ProductResult[]> {
+// ===== BUSCAR EN TODOS LOS GRUPOS "VENTAS" DE CUBA =====
+async function searchAllVentasGroups(query: string): Promise<CubaProduct[]> {
   const zai = await ZAI.create();
-  const products: ProductResult[] = [];
+  const allProducts: CubaProduct[] = [];
 
-  // Step 1: Search the web for product prices across multiple platforms
-  console.log("[Search] Step 1: Web search for:", query);
-  
-  let searchResults: any[] = [];
-  try {
-    const searchResponse = await zai.functions.invoke("web_search", {
-      query: `${query} price Amazon AliExpress Temu TikTok SHEIN MercadoLibre 2024 2025`,
-      num: 20,
-    });
-    searchResults = searchResponse || [];
-    console.log("[Search] Got", searchResults.length, "search results");
-  } catch (e) {
-    console.error("[Search] web_search failed:", e);
-    // Try simpler query
-    try {
-      const searchResponse2 = await zai.functions.invoke("web_search", {
-        query: `${query} best price buy`,
-        num: 15,
-      });
-      searchResults = searchResponse2 || [];
-      console.log("[Search] Fallback got", searchResults.length, "results");
-    } catch (e2) {
-      console.error("[Search] Fallback web_search also failed:", e2);
+  // Construir queries apuntando a grupos "Ventas [lugar]" en Facebook
+  const searchQueries: string[] = [];
+
+  // Query 1: General Cuba + Facebook
+  searchQueries.push(`"${query}" grupo Ventas Cuba Facebook precio teléfono`);
+
+  // Query 2-5: Provincias principales (4 grupos más grandes)
+  searchQueries.push(`"${query}" "Ventas La Habana" Facebook precio`);
+  searchQueries.push(`"${query}" "Ventas Santiago" OR "Ventas Holguín" Facebook precio`);
+  searchQueries.push(`"${query}" "Ventas Villa Clara" OR "Ventas Camagüey" Facebook precio`);
+  searchQueries.push(`"${query}" "Ventas Pinar" OR "Ventas Matanzas" Facebook precio`);
+
+  // Query 6: Province medias
+  searchQueries.push(`"${query}" "Ventas Granma" OR "Ventas Las Tunas" OR "Ventas Ciego" Facebook precio`);
+
+  // Query 7: Revolico + otros sitios
+  searchQueries.push(`"${query}" Revolico Cuba precio teléfono`);
+
+  // Query 8: Marketplace + grupos adicionales
+  searchQueries.push(`"${query}" marketplace Cuba Facebook grupo ventas`);
+
+  console.log(`[CubaFinder] Ejecutando ${searchQueries.length} búsquedas en grupos Ventas...`);
+
+  // Ejecutar en paralelo
+  let allResults: any[] = [];
+  const batchSize = 4;
+
+  for (let i = 0; i < searchQueries.length; i += batchSize) {
+    const batch = searchQueries.slice(i, i + batchSize);
+    console.log(`[CubaFinder] Lote ${Math.floor(i / batchSize) + 1}`);
+
+    const batchResults = await Promise.allSettled(
+      batch.map(async (q) => {
+        try {
+          const results = await zai.functions.invoke("web_search", { query: q, num: 10 });
+          return results || [];
+        } catch {
+          return [];
+        }
+      })
+    );
+
+    for (const r of batchResults) {
+      if (r.status === "fulfilled" && Array.isArray(r.value)) allResults.push(...r.value);
     }
   }
 
-  if (searchResults.length === 0) {
-    return [];
-  }
+  // Deduplicar
+  const seenUrls = new Set<string>();
+  const unique = allResults.filter((r: any) => {
+    const u = r.url || "";
+    if (!u || seenUrls.has(u)) return false;
+    seenUrls.add(u);
+    return true;
+  });
 
-  // Step 2: Use AI to extract structured product data from search results
-  console.log("[Search] Step 2: Extracting products with AI...");
+  console.log(`[CubaFinder] ${unique.length} resultados únicos`);
 
-  const contextText = searchResults
-    .slice(0, 15)
-    .map((r: any, i: number) => {
-      return `[${i + 1}] ${r.name || "Sin título"}
+  if (unique.length === 0) return [];
+
+  // ===== IA EXTRAER: precio, teléfono, fecha, provincia, municipio, grupo =====
+  const contextText = unique.slice(0, 25).map((r: any, i: number) => {
+    return `[${i + 1}]
+Título: ${r.name || ""}
 URL: ${r.url || ""}
-Snippet: ${r.snippet || ""}`;
-    })
-    .join("\n\n");
+Descripción: ${r.snippet || ""}
+Sitio: ${r.host_name || ""}
+Fecha: ${r.date || ""}`;
+  }).join("\n\n");
 
-  const extractionPrompt = `Eres un experto en comparación de precios de e-commerce. Analiza estos resultados de búsqueda y extrae productos reales con sus precios.
+  const prompt = `Analiza publicaciones de venta en Cuba de grupos Facebook tipo "Ventas La Habana", "Ventas Pinar", "Ventas Cárdenas", etc.
 
-PRODUCTO BUSCADO: "${query}"
+PRODUCTO: "${query}"
 
-RESULTADOS DE BÚSQUEDA:
+PUBLICACIONES:
 ${contextText}
 
-PLATAFORMAS RECONOCIDAS: Amazon, AliExpress, Temu, TikTok Shop, SHEIN, MercadoLibre, eBay, Walmart, Best Buy, Samsung, Target
+GRUPOS DE VENTAS CUBANOS: ${GRUPOS_VENTAS.slice(0, 30).join(", ")}
 
 INSTRUCCIONES:
-- Extrae SOLO productos que coincidan con "${query}"
-- Para CADA producto encontrado, incluye: nombre, precio en USD, plataforma/tienda, y URL
-- Si un resultado tiene precio extráelo (busca $, USD, etc)
-- Si no hay precio explícito pero es un producto real de la búsqueda, inclúyelo con price: 0
-- Máximo 12 productos
-- IMPORTANTE: Incluye productos de DIFERENTES tiendas para poder comparar precios
-- Las URLs deben ser las reales de los productos
+- Busca publicaciones donde alguien venda "${query}" en Cuba
+- Identifica el GRUPO (ej: "Ventas La Habana", "Ventas Pinar del Río", "Ventas Cárdenas")
+- Extrae PRECIO en USD ($) o CUP
+- Extrae TELÉFONO (cubanos: +53 5xxxxxxx, 5xxxxxxx, 53xxxx)
+- Determina la PROVINCIA y MUNICIPIO basándote en el nombre del grupo
+- Extrae FECHA de publicación si aparece
 
-Responde SOLO en JSON válido con este formato exacto:
-{
-  "products": [
-    {
-      "name": "nombre del producto",
-      "price": 29.99,
-      "platform": "amazon",
-      "platformName": "Amazon",
-      "url": "https://...",
-      "rating": 4.5
-    }
-  ]
-}
+REGLAS:
+- Si dice "$150" o "$150 USD" → price: 150, currency: "USD"
+- Si dice "150 CUP" o "150 pesos" → price: 150, currency: "CUP"
+- Teléfonos cubanos: 8 dígitos, empiezan con 5, o +53
+- Provincia: derivada del grupo (ej "Ventas Pinar" → "Pinar del Río")
+- NO inventes datos que no estén en el texto
 
-Si no encuentras productos relevantes, responde con {"products": []}`;
+JSON:
+{"products":[{"name":"","price":0,"currency":"USD","phone":"","province":"","municipality":"","group":"","publishDate":"","url":"","notes":""}]}`;
 
   try {
-    const aiResponse = await zai.chat.completions.create({
+    const ai = await zai.chat.completions.create({
       messages: [
-        {
-          role: "system",
-          content: "Eres un extractor de datos de productos. Siempre responde en JSON válido. No incluyas texto fuera del JSON.",
-        },
-        {
-          role: "user",
-          content: extractionPrompt,
-        },
+        { role: "system", content: "Extrae datos de ventas Cuba. JSON solo. No inventes." },
+        { role: "user", content: prompt },
       ],
     });
 
-    const content = aiResponse.choices[0]?.message?.content || "";
-    console.log("[Search] AI response length:", content.length);
+    const content = ai.choices[0]?.message?.content || "";
+    console.log("[CubaFinder] AI:", content.substring(0, 200));
 
-    // Parse JSON from response
     let parsed: any;
     try {
-      const jsonStr = content
-        .replace(/```json\n?/g, "")
-        .replace(/```\n?/g, "")
-        .trim();
-      parsed = JSON.parse(jsonStr);
+      parsed = JSON.parse(content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
     } catch {
-      // Try to find JSON in the response
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
-      } else {
-        console.error("[Search] Could not parse AI response as JSON");
-        return [];
-      }
+      const m = content.match(/\{[\s\S]*\}/);
+      if (m) parsed = JSON.parse(m[0]); else return [];
     }
 
-    const extractedProducts = parsed.products || [];
-    console.log("[Search] AI extracted", extractedProducts.length, "products");
+    for (const p of (parsed.products || [])) {
+      if (!p.name && !p.url) continue;
+      const price = typeof p.price === "number" ? p.price : parseFloat(String(p.price).replace(/[^\d.]/g, "")) || 0;
+      const currency = String(p.currency || "USD").toUpperCase();
 
-    for (const p of extractedProducts) {
-      if (!p.name || !p.url) continue;
-
-      const platformInfo = p.platformName
-        ? { platform: (p.platform || p.platformName.toLowerCase()).replace(/\s/g, ""), name: p.platformName }
-        : detectPlatform(p.url, p.name);
-
-      const price = typeof p.price === "number" ? p.price : parseFloat(String(p.price)) || 0;
-
-      products.push({
-        id: `ai-${hashStr(p.url + p.name)}`,
-        name: String(p.name).substring(0, 120),
-        price: price,
-        priceFormatted: price > 0 ? `$${price.toFixed(2)}` : "Ver precio en tienda",
-        platform: platformInfo.platform,
-        platformName: platformInfo.name,
-        url: String(p.url),
-        image: "",
-        rating: typeof p.rating === "number" ? p.rating : 0,
+      allProducts.push({
+        id: `cuba-${hashStr(p.url + p.name + (p.phone || ""))}`,
+        name: String(p.name || "").substring(0, 150),
+        price,
+        priceFormatted: price > 0 ? `$${price.toLocaleString("es-CU")} ${currency}` : "Preguntar",
+        currency,
+        url: String(p.url || "#"),
+        phone: formatPhone(String(p.phone || "")),
+        province: resolveProvince(String(p.province || ""), String(p.municipality || ""), String(p.group || "")),
+        municipality: String(p.municipality || "").trim(),
+        group: String(p.group || "").trim(),
+        publishDate: String(p.publishDate || "").trim(),
         isBestPrice: false,
+        notes: String(p.notes || "").trim(),
       });
     }
   } catch (e) {
-    console.error("[Search] AI extraction error:", e);
+    console.error("[CubaFinder] AI error:", e);
   }
 
-  return products;
+  return allProducts;
 }
 
-// ===== DUCKDUCKGO FALLBACK =====
-async function searchDuckDuckGoLite(query: string): Promise<any[]> {
-  const results: any[] = [];
-  const searchTerms = [`${query} price buy`, `${query} best price`];
+function formatPhone(phone: string): string {
+  if (!phone || phone.length < 3) return "";
+  let c = phone.replace(/[^\d+]/g, "");
+  if (c.length === 8 && c.startsWith("5")) c = "+53 " + c;
+  else if (c.length === 10 && c.startsWith("53")) c = "+" + c;
+  else if (c.length === 11 && c.startsWith("53")) c = "+" + c;
+  return c;
+}
 
-  for (const term of searchTerms) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
-      try {
-        const formData = new URLSearchParams();
-        formData.append("q", term);
-
-        const res = await fetch("https://lite.duckduckgo.com/lite/", {
-          method: "POST",
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            Accept: "text/html",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Content-Type": "application/x-www-form-urlencoded",
-            Origin: "https://lite.duckduckgo.com",
-            Referer: "https://lite.duckduckgo.com/",
-          },
-          body: formData.toString(),
-          signal: controller.signal as unknown as AbortSignal,
-        });
-
-        if (!res.ok) continue;
-        const html = await res.text();
-        const allRows = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || [];
-
-        for (let i = 0; i < allRows.length - 2; i++) {
-          const row = allRows[i];
-          const linkMatch = row.match(/<a[^>]+href="([^"]*(?:uddg=)[^"]*)"[^>]*>([\s\S]*?)<\/a>/);
-          if (!linkMatch) continue;
-
-          let decodedUrl = "";
-          try {
-            const uddgMatch = linkMatch[1].match(/uddg=([^&]+)/);
-            if (uddgMatch) decodedUrl = decodeURIComponent(uddgMatch[1]);
-          } catch {}
-
-          if (!decodedUrl || decodedUrl.includes("duckduckgo.com")) continue;
-
-          const title = linkMatch[2].replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").trim();
-          let snippet = "";
-          if (i + 1 < allRows.length) {
-            const snippetText = allRows[i + 1].replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").trim();
-            if (snippetText && !snippetText.startsWith("www.") && snippetText.length > 20) snippet = snippetText;
-          }
-
-          if (title && decodedUrl) results.push({ url: decodedUrl, title, snippet, imageUrl: "" });
-        }
-
-        if (results.length > 0) break;
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch (e) {
-      console.error("[Search] DDG error:", e);
-    }
+function resolveProvince(province: string, municipality: string, group: string): string {
+  const text = `${province} ${municipality} ${group}`.toLowerCase();
+  for (const [key, value] of Object.entries(PROVINCIAS_MAP)) {
+    if (text.includes(key)) return value;
   }
-  return results;
-}
-
-// ===== UTILITY FUNCTIONS =====
-function buildPlatformLinks(searchQuery: string) {
-  const encoded = encodeURIComponent(searchQuery);
-  return [
-    { name: "Amazon", platform: "amazon", color: "#FF9900", bgColor: "#FF990014", logo: "📦", searchUrl: `https://www.amazon.com/s?k=${encoded}`, shopUrl: `https://www.amazon.com/s?k=${encoded}` },
-    { name: "AliExpress", platform: "aliexpress", color: "#FF4747", bgColor: "#FF474714", logo: "🛍️", searchUrl: `https://www.aliexpress.com/wholesale?SearchText=${encoded}`, shopUrl: `https://www.aliexpress.com/wholesale?SearchText=${encoded}` },
-    { name: "SHEIN", platform: "shein", color: "#1A1A1A", bgColor: "#1A1A1A14", logo: "👗", searchUrl: `https://www.shein.com/${encoded}-c-2260.html`, shopUrl: `https://www.shein.com/${encoded}-c-2260.html` },
-    { name: "Temu", platform: "temu", color: "#FB6F20", bgColor: "#FB6F2014", logo: "🧡", searchUrl: `https://www.temu.com/search-result.html?search_key=${encoded}`, shopUrl: `https://www.temu.com/search-result.html?search_key=${encoded}` },
-    { name: "TikTok Shop", platform: "tiktok", color: "#FE2C55", bgColor: "#FE2C5514", logo: "🎵", searchUrl: `https://www.tiktok.com/search?q=${encoded}&type=product`, shopUrl: `https://www.tiktok.com/search?q=${encoded}&type=product` },
-    { name: "MercadoLibre", platform: "mercadolibre", color: "#FFE600", bgColor: "#FFE60014", logo: "🛒", searchUrl: `https://listado.mercadolibre.com/${encoded}`, shopUrl: `https://www.mercadolibre.com/${encoded}` },
-  ];
-}
-
-function detectPlatform(url: string, title: string): { platform: string; name: string } {
-  const patterns: Array<{ re: RegExp; platform: string; name: string }> = [
-    { re: /amazon\./i, platform: "amazon", name: "Amazon" },
-    { re: /mercadolibre|mercadolivre/i, platform: "mercadolibre", name: "MercadoLibre" },
-    { re: /aliexpress/i, platform: "aliexpress", name: "AliExpress" },
-    { re: /temu/i, platform: "temu", name: "Temu" },
-    { re: /shein/i, platform: "shein", name: "SHEIN" },
-    { re: /tiktok/i, platform: "tiktok", name: "TikTok Shop" },
-    { re: /samsung\./i, platform: "samsung", name: "Samsung" },
-    { re: /ebay/i, platform: "ebay", name: "eBay" },
-    { re: /walmart/i, platform: "walmart", name: "Walmart" },
-    { re: /target/i, platform: "target", name: "Target" },
-    { re: /bestbuy/i, platform: "bestbuy", name: "Best Buy" },
-  ];
-  const text = url + " " + title;
-  for (const p of patterns) {
-    if (p.re.test(text)) return { platform: p.platform, name: p.name };
-  }
-  return { platform: "otra", name: "Otra tienda" };
-}
-
-function extractPrice(text: string): { amount: number; formatted: string } {
-  const patterns = [/\$\s?([\d,]+\.?\d*)/g, /USD\s?([\d,]+\.?\d*)/gi, /([\d,]+\.?\d*)\s?USD/gi, /€\s?([\d,]+\.?\d*)/g, /R\$\s?([\d,]+\.?\d*)/g];
-  let bestAmount = 0;
-  let bestFormatted = "";
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    const matches = text.matchAll(pattern);
-    for (const match of matches) {
-      const numStr = match[1].replace(/,/g, "");
-      const amount = parseFloat(numStr);
-      if (amount > 0 && amount < 999999 && (!bestAmount || amount < bestAmount)) {
-        bestAmount = amount;
-        bestFormatted = match[0].trim();
-      }
-    }
-  }
-  return bestAmount > 0 ? { amount: bestAmount, formatted: bestFormatted } : { amount: 0, formatted: "" };
-}
-
-function cleanTitle(title: string): string {
-  let clean = title.replace(/\s*[-|–—]\s*(Amazon|AliExpress|Temu|SHEIN|MercadoLibre|TikTok|eBay|Walmart).*$/i, "").replace(/\s*[-|–—]\s*$/, "").replace(/<[^>]*>/g, "").trim();
-  if (clean.length > 120) clean = clean.substring(0, 117) + "...";
-  return clean || title.substring(0, 80);
+  return province.trim() || "";
 }
 
 function hashStr(str: string): string {
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i);
-    hash |= 0;
-  }
+  for (let i = 0; i < str.length; i++) { hash = (hash << 5) - hash + str.charCodeAt(i); hash |= 0; }
   return Math.abs(hash).toString(36);
-}
-
-function generateSummary(results: ProductResult[], query: string): string {
-  const priced = results.filter((r) => r.price > 0);
-  const platformNames = [...new Set(results.map((r) => r.platformName))];
-
-  if (results.length === 0) {
-    return `No encontramos resultados directamente, pero puedes buscar en cada tienda usando los enlaces de abajo.`;
-  }
-
-  if (priced.length === 0) {
-    return `Encontramos ${results.length} resultado(s) en ${platformNames.join(", ")}. Haz clic en cada uno para ver el precio en la tienda.`;
-  }
-
-  const min = Math.min(...priced.map((r) => r.price));
-  const max = Math.max(...priced.map((r) => r.price));
-  const cheapest = priced.find((r) => r.price === min);
-  const avg = priced.reduce((s, r) => s + r.price, 0) / priced.length;
-
-  if (priced.length === 1) {
-    return `Encontramos 1 precio para "${query}": $${min.toFixed(2)} en ${cheapest?.platformName}.`;
-  }
-
-  const savings = max - min;
-  return `${priced.length} precios encontrados para "${query}" en ${platformNames.join(", ")}. Rango: $${min.toFixed(2)} - $${max.toFixed(2)} | Promedio: $${avg.toFixed(2)} | Mejor precio: ${cheapest?.platformName} — ahorras hasta $${savings.toFixed(2)}`;
 }
