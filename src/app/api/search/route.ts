@@ -218,8 +218,9 @@ Formato JSON:
     });
   } catch (error) {
     console.error("[Search] Error:", error);
+    const errMsg = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "Error al buscar productos. Intenta de nuevo." },
+      { error: "Error al buscar: " + errMsg },
       { status: 500 }
     );
   }
