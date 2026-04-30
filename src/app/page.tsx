@@ -56,16 +56,21 @@ export default function Home() {
   const [filterPlatform, setFilterPlatform] = useState<string>("all");
   const [imagePreview, setImagePreview] = useState<string | null>(null);
 
-  // Perform search
+  // Perform search (query can be a URL or text)
   const performSearch = useCallback(async (query: string) => {
     setIsLoading(true);
     setViewMode("results");
+
+    const isUrl = /^https?:\/\//i.test(query);
 
     try {
       const response = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({
+          query: isUrl ? "" : query,
+          url: isUrl ? query : "",
+        }),
       });
 
       if (!response.ok) {

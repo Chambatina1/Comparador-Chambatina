@@ -4,110 +4,225 @@ import ZAI from "z-ai-web-dev-sdk";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { query, imageUrl } = body;
+    const { query, imageUrl, url } = body;
 
-    if (!query && !imageUrl) {
+    if (!query && !imageUrl && !url) {
       return NextResponse.json(
-        { error: "Se requiere un término de búsqueda o una imagen" },
+        { error: "Escribe algo, pega un link o sube una foto" },
         { status: 400 }
       );
     }
 
-    let searchQuery = query;
+    let searchQuery = query?.trim() || "";
+    let sourceUrl = url?.trim() || "";
 
-    // If an image URL is provided, first analyze it to get a description
-    if (imageUrl && !query) {
+    // ============================================
+    // 1. If user pasted a URL, extract product info from it
+    // ============================================
+    if (sourceUrl && !searchQuery) {
       const zai = await ZAI.create();
-      const analysis = await zai.chat.completions.create({
-        model: "default",
-        messages: [
-          {
-            role: "system",
-            content:
-              "Eres un asistente de compras. Describe el producto de la imagen en 2-5 palabras para buscarlo. Responde SOLO con las palabras de búsqueda, sin explicaciones.",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "image_url",
-                image_url: { url: imageUrl },
-              },
-              {
-                type: "text",
-                text: "Describe este producto brevemente para buscarlo en tiendas online:",
-              },
-            ],
-          },
-        ],
-      });
-      searchQuery = analysis.choices[0]?.message?.content?.trim() || "";
+      try {
+        // Try to extract product name from URL
+        const urlAnalysis = await zai.chat.completions.create({
+          messages: [
+            {
+              role: "system",
+              content: `Eres un experto en e-commerce. El usuario te da una URL de un producto.
+Tu trabajo es:
+1. Identificar el producto de la URL
+2. Devolver SOLO el nombre del producto en 3-8 palabras optimizado para buscar
+3. Si no puedes identificar el producto, devuelve un nombre de búsqueda genérico basado en la URL
+Responde SOLO con las palabras de búsqueda, nada más.`,
+            },
+            {
+              role: "user",
+              content: `URL: ${sourceUrl}\n\n¿Qué producto es este? Dime el nombre para buscarlo.`,
+            },
+          ],
+        });
+        searchQuery = urlAnalysis.choices[0]?.message?.content?.trim() || "";
+      } catch {
+        // Fallback: extract from URL path
+        const urlPath = new URL(sourceUrl).pathname;
+        searchQuery = urlPath
+          .replace(/[-_]/g, " ")
+          .replace(/\/dp\/|\/item\/|\/p\//g, " ")
+          .split("/")
+          .filter((w) => w.length > 2)
+          .slice(0, 6)
+          .join(" ");
+      }
+    }
+
+    // ============================================
+    // 2. If user uploaded an image, analyze it
+    // ============================================
+    if (imageUrl && !searchQuery) {
+      const zai = await ZAI.create();
+      try {
+        const analysis = await zai.chat.completions.create({
+          messages: [
+            {
+              role: "system",
+              content:
+                "Eres un experto en e-commerce. Describe el producto de la imagen en 3-6 palabras clave optimizadas para buscar en tiendas online. Responde SOLO con las palabras de búsqueda separadas por espacios, sin explicaciones.",
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: { url: imageUrl },
+                },
+                {
+                  type: "text",
+                  text: "Describe este producto brevemente para buscarlo:",
+                },
+              ],
+            },
+          ],
+        });
+        searchQuery = analysis.choices[0]?.message?.content?.trim() || "";
+      } catch {
+        searchQuery = "";
+      }
     }
 
     if (!searchQuery) {
       return NextResponse.json(
-        { error: "No se pudo identificar el producto de la imagen" },
+        { error: "No se pudo identificar el producto. Intenta con una descripción." },
         { status: 400 }
       );
     }
 
+    // ============================================
+    // 3. Search across platforms using web search
+    // ============================================
     const zai = await ZAI.create();
 
-    // Search queries for different platforms
-    const searchQueries = [
-      `${searchQuery} precio site:amazon.com OR site:mercadolibre.com`,
-      `${searchQuery} comprar barato site:aliexpress.com OR site:temu.com`,
-      `${searchQuery} precio oferta site:shein.com OR site:tiktok.com`,
+    // Individual platform searches (more effective than site: operators)
+    const platformSearches = [
+      { query: `${searchQuery} buy price Amazon`, platformHint: "amazon" },
+      { query: `${searchQuery} comprar precio AliExpress`, platformHint: "aliexpress" },
+      { query: `${searchQuery} SHEIN shopping price`, platformHint: "shein" },
+      { query: `${searchQuery} Temu deal price`, platformHint: "temu" },
+      { query: `${searchQuery} TikTok Shop price`, platformHint: "tiktok" },
+      { query: `${searchQuery} MercadoLibre precio`, platformHint: "mercadolibre" },
+      // General searches for broader results
+      { query: `${searchQuery} best price comparison`, platformHint: "" },
+      { query: `${searchQuery} cheapest online store`, platformHint: "" },
     ];
 
-    // Execute searches in parallel
-    const searchPromises = searchQueries.map((q) =>
+    const searchPromises = platformSearches.map((s) =>
       zai.functions
         .invoke("web_search", {
-          query: q,
+          query: s.query,
           num: 10,
         })
-        .catch(() => ({ results: [] }))
+        .then((results: any) => ({
+          results: results || [],
+          platformHint: s.platformHint,
+        }))
+        .catch(() => ({ results: [], platformHint: s.platformHint }))
     );
 
-    const searchResults = await Promise.all(searchPromises);
+    const searchResponses = await Promise.all(searchPromises);
 
-    // Parse and structure results
-    const allResults = parseSearchResults(searchResults, searchQuery);
+    // ============================================
+    // 4. Use AI to extract structured product data from results
+    // ============================================
+    const allSnippets: string[] = [];
+    for (const response of searchResponses) {
+      const items = Array.isArray(response.results) ? response.results : [];
+      for (const item of items) {
+        const title = item.name || item.title || "";
+        const url = item.url || "";
+        const snippet = item.snippet || item.description || "";
+        if (title || url) {
+          allSnippets.push(`TITLE: ${title} | URL: ${url} | ${snippet}`);
+        }
+      }
+    }
 
-    // Sort by relevance and price
-    const sortedResults = sortResults(allResults);
+    // Use AI to parse results into structured products
+    let products: ProductResult[] = [];
 
-    // Generate price summary
-    const summary = generateSummary(sortedResults);
+    if (allSnippets.length > 0) {
+      try {
+        const aiParse = await zai.chat.completions.create({
+          messages: [
+            {
+              role: "system",
+              content: `Eres un extractor de datos de productos. Dado un texto con resultados de búsqueda web, extrae productos reales con sus precios.
+
+Plataformas válidas: amazon, aliexpress, shein, temu, tiktok, mercadolibre, otra
+
+IMPORTANTE:
+- Solo incluye resultados que sean productos reales con precio
+- Si el precio no es claro, pon 0
+- Si no hay resultados con precio, devuelve un array vacío []
+- Responde SOLO con JSON válido, sin markdown, sin explicaciones
+- Máximo 15 productos
+
+Formato JSON:
+[{"name":"nombre del producto","price":29.99,"platform":"amazon","url":"https://..."}]`,
+            },
+            {
+              role: "user",
+              content: `Buscando: "${searchQuery}"\n\nResultados:\n${allSnippets.slice(0, 30).join("\n")}`,
+            },
+          ],
+        });
+
+        let aiContent = aiParse.choices[0]?.message?.content?.trim() || "[]";
+        // Clean markdown code blocks if present
+        aiContent = aiContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+
+        const parsed = JSON.parse(aiContent);
+        if (Array.isArray(parsed)) {
+          products = parsed.map((p: any, i: number) => ({
+            id: `prod-${i}-${Date.now()}`,
+            name: p.name || "Producto",
+            price: typeof p.price === "number" ? p.price : 0,
+            priceFormatted:
+              p.price > 0 ? `$${p.price.toFixed(2)}` : "Ver precio",
+            platform: p.platform || "otra",
+            platformName: getPlatformName(p.platform),
+            url: p.url || "#",
+            image: p.image || "",
+            rating: p.rating || 0,
+            isBestPrice: false,
+          }));
+        }
+      } catch (parseErr) {
+        console.error("[Search] AI parse error:", parseErr);
+        // Fallback: use raw results
+        products = extractFromRawResults(searchResponses, searchQuery);
+      }
+    }
+
+    // If AI couldn't extract anything, use raw results
+    if (products.length === 0) {
+      products = extractFromRawResults(searchResponses, searchQuery);
+    }
+
+    // Sort and mark best price
+    const sorted = sortResults(products);
+    const summary = generateSummary(sorted, searchQuery);
 
     return NextResponse.json({
       query: searchQuery,
-      results: sortedResults,
+      results: sorted,
       summary,
-      totalResults: sortedResults.length,
+      totalResults: sorted.length,
     });
   } catch (error) {
-    console.error("Search API error:", error);
+    console.error("[Search] Error:", error);
     return NextResponse.json(
       { error: "Error al buscar productos. Intenta de nuevo." },
       { status: 500 }
     );
   }
-}
-
-interface RawSearchResult {
-  title?: string;
-  url?: string;
-  description?: string;
-  price?: string;
-  results?: Array<{
-    title?: string;
-    url?: string;
-    description?: string;
-    price?: string;
-    snippet?: string;
-  }>;
 }
 
 interface ProductResult {
@@ -123,8 +238,21 @@ interface ProductResult {
   isBestPrice: boolean;
 }
 
-function parseSearchResults(
-  searchResults: RawSearchResult[],
+function getPlatformName(platform: string): string {
+  const names: Record<string, string> = {
+    amazon: "Amazon",
+    aliexpress: "AliExpress",
+    shein: "SHEIN",
+    temu: "Temu",
+    tiktok: "TikTok Shop",
+    mercadolibre: "MercadoLibre",
+    otra: "Otra tienda",
+  };
+  return names[platform?.toLowerCase()] || "Otra tienda";
+}
+
+function extractFromRawResults(
+  searchResponses: any[],
   query: string
 ): ProductResult[] {
   const products: ProductResult[] = [];
@@ -133,181 +261,102 @@ function parseSearchResults(
   const platformPatterns: Array<{
     pattern: RegExp;
     platform: string;
-    platformName: string;
   }> = [
-    { pattern: /amazon\./i, platform: "amazon", platformName: "Amazon" },
-    {
-      pattern: /mercadolibre|mercadolivre/i,
-      platform: "mercadolibre",
-      platformName: "MercadoLibre",
-    },
-    { pattern: /aliexpress/i, platform: "aliexpress", platformName: "AliExpress" },
-    { pattern: /temu/i, platform: "temu", platformName: "Temu" },
-    { pattern: /shein/i, platform: "shein", platformName: "SHEIN" },
-    { pattern: /tiktok/i, platform: "tiktok", platformName: "TikTok Shop" },
+    { pattern: /amazon\./i, platform: "amazon" },
+    { pattern: /mercadolibre|mercadolivre/i, platform: "mercadolibre" },
+    { pattern: /aliexpress/i, platform: "aliexpress" },
+    { pattern: /temu/i, platform: "temu" },
+    { pattern: /shein/i, platform: "shein" },
+    { pattern: /tiktok/i, platform: "tiktok" },
   ];
 
-  for (const result of searchResults) {
-    const items = result.results || (result.title ? [result] : []);
-
+  for (const response of searchResponses) {
+    const items = Array.isArray(response.results)
+      ? response.results
+      : [];
     for (const item of items) {
-      const title = item.title || item.description || "";
-      const url = item.url || "";
+      const title = item.name || item.title || "";
+      const itemUrl = item.url || "";
       const snippet = item.snippet || item.description || "";
 
-      if (!title || !url) continue;
+      if (!title && !itemUrl) continue;
+      if (seen.has(itemUrl)) continue;
+      seen.add(itemUrl);
 
-      // Skip duplicates
-      if (seen.has(url)) continue;
-      seen.add(url);
-
-      // Detect platform
-      let detectedPlatform = "other";
-      let detectedPlatformName = "Otra tienda";
+      // Detect platform from URL
+      let platform = "otra";
       for (const pp of platformPatterns) {
-        if (pp.pattern.test(url)) {
-          detectedPlatform = pp.platform;
-          detectedPlatformName = pp.platformName;
+        if (pp.pattern.test(itemUrl)) {
+          platform = pp.platform;
           break;
         }
       }
 
-      // Extract price from title and snippet
-      const priceInfo = extractPrice(title + " " + snippet);
+      // Extract price
+      const text = title + " " + snippet;
+      const priceMatch = text.match(/\$\s?([\d,]+\.?\d*)/);
+      const price = priceMatch ? parseFloat(priceMatch[1].replace(/,/g, "")) : 0;
 
-      // Generate a clean product name
-      const cleanName = extractProductName(title);
+      // Clean name
+      let name = title
+        .replace(/\s*[-|]\s*(Amazon|AliExpress|Temu|SHEIN|MercadoLibre|TikTok).*$/i, "")
+        .trim();
+      if (name.length > 100) name = name.substring(0, 97) + "...";
 
       products.push({
-        id: generateId(url),
-        name: cleanName,
-        price: priceInfo.amount,
-        priceFormatted: priceInfo.formatted,
-        platform: detectedPlatform,
-        platformName: detectedPlatformName,
-        url,
-        image: extractImageFromSnippet(snippet),
-        rating: extractRating(snippet),
+        id: `raw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: name || query,
+        price,
+        priceFormatted: price > 0 ? `$${price.toFixed(2)}` : "Ver precio",
+        platform,
+        platformName: getPlatformName(platform),
+        url: itemUrl,
+        image: "",
+        rating: 0,
         isBestPrice: false,
       });
-    }
-  }
-
-  // Mark best price
-  const pricedProducts = products.filter((p) => p.price > 0);
-  if (pricedProducts.length > 0) {
-    const minPrice = Math.min(...pricedProducts.map((p) => p.price));
-    for (const p of products) {
-      p.isBestPrice = p.price > 0 && p.price === minPrice;
     }
   }
 
   return products;
 }
 
-function extractPrice(text: string): {
-  amount: number;
-  formatted: string;
-} {
-  // Match various price formats: $10.99, USD 10.99, 10.99 USD, MXN$10, etc.
-  const pricePatterns = [
-    /\$\s?([\d,]+\.?\d*)/g,
-    /USD\s?([\d,]+\.?\d*)/gi,
-    /([\d,]+\.?\d*)\s?USD/gi,
-    /([\d,]+\.?\d*)\s?MXN/gi,
-    /MXN\s?\$\s?([\d,]+\.?\d*)/gi,
-    /S\/\.\s?([\d,]+\.?\d*)/g,
-    /R\$\s?([\d,]+\.?\d*)/g,
-    /€\s?([\d,]+\.?\d*)/g,
-  ];
-
-  let bestMatch = "";
-  let bestAmount = 0;
-
-  for (const pattern of pricePatterns) {
-    pattern.lastIndex = 0;
-    const matches = text.matchAll(pattern);
-    for (const match of matches) {
-      const numStr = match[1].replace(/,/g, "");
-      const amount = parseFloat(numStr);
-      if (amount > 0 && amount < 999999 && (!bestMatch || amount < bestAmount)) {
-        bestAmount = amount;
-        bestMatch = match[0].trim();
-      }
-    }
-  }
-
-  if (bestMatch) {
-    return { amount: bestAmount, formatted: bestMatch };
-  }
-
-  return { amount: 0, formatted: "Ver precio" };
-}
-
-function extractProductName(title: string): string {
-  // Clean up common prefixes/suffixes
-  let name = title
-    .replace(/[-_|]\s*(Amazon|AliExpress|Temu|SHEIN|MercadoLibre|TikTok Shop).*$/i, "")
-    .replace(/\s*(Amazon|AliExpress|Temu|SHEIN|MercadoLibre|TikTok Shop).*$/i, "")
-    .replace(/\s*-\s*.*$/, "")
-    .trim();
-
-  // Limit length
-  if (name.length > 100) {
-    name = name.substring(0, 97) + "...";
-  }
-
-  return name || title.substring(0, 80);
-}
-
-function extractImageFromSnippet(snippet: string): string {
-  // Return empty - we'll use placeholder images
-  return "";
-}
-
-function extractRating(snippet: string): number {
-  const ratingMatch = snippet.match(/(\d+\.?\d*)\s*(?:de\s*5|estrellas|stars)/i);
-  if (ratingMatch) {
-    return Math.min(5, Math.max(0, parseFloat(ratingMatch[1])));
-  }
-  return 0;
-}
-
-function generateId(url: string): string {
-  let hash = 0;
-  for (let i = 0; i < url.length; i++) {
-    const char = url.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash |= 0;
-  }
-  return Math.abs(hash).toString(36);
-}
-
 function sortResults(results: ProductResult[]): ProductResult[] {
+  const platformOrder = ["amazon", "aliexpress", "shein", "temu", "tiktok", "mercadolibre", "otra"];
+
   return results.sort((a, b) => {
-    // Put results with prices first
+    // Products with prices first
     if (a.price > 0 && b.price === 0) return -1;
     if (a.price === 0 && b.price > 0) return 1;
-    // Sort by price ascending
+    // Then by price ascending
     if (a.price > 0 && b.price > 0) return a.price - b.price;
-    return 0;
+    // Then by platform order
+    const aIdx = platformOrder.indexOf(a.platform);
+    const bIdx = platformOrder.indexOf(b.platform);
+    return aIdx - bIdx;
   });
 }
 
-function generateSummary(results: ProductResult[]): string {
+function generateSummary(results: ProductResult[], query: string): string {
   const priced = results.filter((r) => r.price > 0);
+
   if (priced.length === 0) {
-    return "No se encontraron precios para este producto en las plataformas analizadas.";
+    const platforms = [...new Set(results.map((r) => r.platformName))];
+    if (platforms.length > 0) {
+      return `Encontramos ${results.length} resultados para "${query}" en ${platforms.join(", ")}. Los precios no se pudieron extraer automáticamente — haz clic en "Ver precio" para ver el precio real en cada tienda.`;
+    }
+    return `No se encontraron resultados para "${query}" en las plataformas analizadas. Intenta con otro término de búsqueda.`;
   }
 
   const min = Math.min(...priced.map((r) => r.price));
   const max = Math.max(...priced.map((r) => r.price));
+  const avg = priced.reduce((sum, r) => sum + r.price, 0) / priced.length;
   const cheapest = priced.find((r) => r.price === min);
 
-  if (min === max) {
-    return `El precio de este producto es consistente en todas las plataformas: $${min.toFixed(2)} en ${priced.length} tienda(s).`;
+  if (priced.length === 1) {
+    return `Encontramos 1 resultado para "${query}" en ${cheapest?.platformName}: $${min.toFixed(2)}`;
   }
 
   const savings = max - min;
-  return `Este producto está entre $${min.toFixed(2)} y $${max.toFixed(2)}. El precio más bajo es en ${cheapest?.platformName || "una tienda"} por $${min.toFixed(2)} — ¡ahorrás hasta $${savings.toFixed(2)}!`;
+  return `Encontramos ${priced.length} precios para "${query}". Rango: $${min.toFixed(2)} - $${max.toFixed(2)} | Promedio: $${avg.toFixed(2)} | El más barato está en ${cheapest?.platformName} — ahorras hasta $${savings.toFixed(2)}`;
 }
