@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
         color: "#FF9900",
         bgColor: "#FF990014",
         logo: "📦",
-        searchUrl: `https://www.amazon.com/s?k=${encodeURIComponent(searchQuery)}&tag=comparador-20`,
+        searchUrl: `https://www.amazon.com/s?k=${encodeURIComponent(searchQuery)}`,
         shopUrl: `https://www.amazon.com/s?k=${encodeURIComponent(searchQuery)}`,
       },
       {
@@ -111,41 +111,106 @@ export async function POST(request: NextRequest) {
       },
     ];
 
-    // Try to fetch actual product data from DuckDuckGo HTML (no API key needed)
-    const ddgResults = await searchDuckDuckGo(searchQuery);
-
-    // Parse results and match with platforms
+    // Try multiple search sources
     const products: ProductResult[] = [];
 
-    for (const result of ddgResults) {
-      const detectedPlatform = detectPlatform(result.url, result.title);
-      const priceInfo = extractPrice(result.title + " " + result.snippet);
-
-      products.push({
-        id: `ddg-${hashStr(result.url)}`,
-        name: cleanTitle(result.title),
-        price: priceInfo.amount,
-        priceFormatted: priceInfo.amount > 0 ? `$${priceInfo.amount.toFixed(2)}` : "Ver precio en tienda",
-        platform: detectedPlatform.platform,
-        platformName: detectedPlatform.name,
-        url: result.url,
-        image: result.imageUrl || "",
-        rating: 0,
-        isBestPrice: false,
-      });
+    // Source 1: DuckDuckGo Lite
+    try {
+      const ddgResults = await searchDuckDuckGo(searchQuery);
+      for (const result of ddgResults) {
+        const detectedPlatform = detectPlatform(result.url, result.title);
+        const priceInfo = extractPrice(result.title + " " + result.snippet);
+        products.push({
+          id: `ddg-${hashStr(result.url)}`,
+          name: cleanTitle(result.title),
+          price: priceInfo.amount,
+          priceFormatted: priceInfo.amount > 0 ? `$${priceInfo.amount.toFixed(2)}` : "Ver precio en tienda",
+          platform: detectedPlatform.platform,
+          platformName: detectedPlatform.name,
+          url: result.url,
+          image: result.imageUrl || "",
+          rating: 0,
+          isBestPrice: false,
+        });
+      }
+    } catch (e) {
+      console.error("[Search] DuckDuckGo failed, trying Google...", e);
     }
 
+    // Source 2: Google search scraping (fallback)
+    if (products.length === 0) {
+      try {
+        const googleResults = await searchGoogle(searchQuery);
+        for (const result of googleResults) {
+          const detectedPlatform = detectPlatform(result.url, result.title);
+          const priceInfo = extractPrice(result.title + " " + result.snippet);
+          products.push({
+            id: `ggl-${hashStr(result.url)}`,
+            name: cleanTitle(result.title),
+            price: priceInfo.amount,
+            priceFormatted: priceInfo.amount > 0 ? `$${priceInfo.amount.toFixed(2)}` : "Ver precio en tienda",
+            platform: detectedPlatform.platform,
+            platformName: detectedPlatform.name,
+            url: result.url,
+            image: result.imageUrl || "",
+            rating: 0,
+            isBestPrice: false,
+          });
+        }
+      } catch (e) {
+        console.error("[Search] Google failed, trying Bing...", e);
+      }
+    }
+
+    // Source 3: Bing search scraping (last resort)
+    if (products.length === 0) {
+      try {
+        const bingResults = await searchBing(searchQuery);
+        for (const result of bingResults) {
+          const detectedPlatform = detectPlatform(result.url, result.title);
+          const priceInfo = extractPrice(result.title + " " + result.snippet);
+          products.push({
+            id: `bng-${hashStr(result.url)}`,
+            name: cleanTitle(result.title),
+            price: priceInfo.amount,
+            priceFormatted: priceInfo.amount > 0 ? `$${priceInfo.amount.toFixed(2)}` : "Ver precio en tienda",
+            platform: detectedPlatform.platform,
+            platformName: detectedPlatform.name,
+            url: result.url,
+            image: result.imageUrl || "",
+            rating: 0,
+            isBestPrice: false,
+          });
+        }
+      } catch (e) {
+        console.error("[Search] Bing failed too:", e);
+      }
+    }
+
+    // Deduplicate by domain+path
+    const seen = new Set<string>();
+    const uniqueProducts = products.filter((p) => {
+      try {
+        const key = new URL(p.url).hostname + new URL(p.url).pathname;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
     // Mark best price
-    const pricedProducts = products.filter((p) => p.price > 0);
+    const pricedProducts = uniqueProducts.filter((p) => p.price > 0);
     if (pricedProducts.length > 0) {
       const minPrice = Math.min(...pricedProducts.map((p) => p.price));
-      for (const p of products) {
+      for (const p of uniqueProducts) {
         p.isBestPrice = p.price > 0 && p.price === minPrice;
       }
     }
 
     // Sort: with prices first, then by price
-    const sorted = products.sort((a, b) => {
+    const sorted = uniqueProducts.sort((a, b) => {
       if (a.price > 0 && b.price === 0) return -1;
       if (a.price === 0 && b.price > 0) return 1;
       if (a.price > 0 && b.price > 0) return a.price - b.price;
@@ -154,6 +219,7 @@ export async function POST(request: NextRequest) {
 
     const summary = generateSummary(sorted, searchQuery);
 
+    // Always return success with results (even if empty) and platform links
     return NextResponse.json({
       query: searchQuery,
       results: sorted,
@@ -162,96 +228,318 @@ export async function POST(request: NextRequest) {
       totalResults: sorted.length,
     });
   } catch (error) {
-    console.error("[Search] Error:", error);
-    const errMsg = error instanceof Error ? error.message : String(error);
-    return NextResponse.json(
-      { error: "Error al buscar: " + errMsg },
-      { status: 500 }
-    );
+    console.error("[Search] Unexpected error:", error);
+    // Even on error, return the platform links so users can search manually
+    const fallbackQuery = (request.body && typeof request.body === "object" ? (request.body as any).query : "") || "";
+    const encoded = encodeURIComponent(fallbackQuery || "producto");
+
+    return NextResponse.json({
+      query: fallbackQuery,
+      results: [],
+      platformLinks: [
+        {
+          name: "Amazon",
+          platform: "amazon",
+          color: "#FF9900",
+          bgColor: "#FF990014",
+          logo: "📦",
+          searchUrl: `https://www.amazon.com/s?k=${encoded}`,
+          shopUrl: `https://www.amazon.com/s?k=${encoded}`,
+        },
+        {
+          name: "AliExpress",
+          platform: "aliexpress",
+          color: "#FF4747",
+          bgColor: "#FF474714",
+          logo: "🛍️",
+          searchUrl: `https://www.aliexpress.com/wholesale?SearchText=${encoded}`,
+          shopUrl: `https://www.aliexpress.com/wholesale?SearchText=${encoded}`,
+        },
+        {
+          name: "SHEIN",
+          platform: "shein",
+          color: "#1A1A1A",
+          bgColor: "#1A1A1A14",
+          logo: "👗",
+          searchUrl: `https://www.shein.com/${encoded}-c-2260.html`,
+          shopUrl: `https://www.shein.com/${encoded}-c-2260.html`,
+        },
+        {
+          name: "Temu",
+          platform: "temu",
+          color: "#FB6F20",
+          bgColor: "#FB6F2014",
+          logo: "🧡",
+          searchUrl: `https://www.temu.com/search-result.html?search_key=${encoded}`,
+          shopUrl: `https://www.temu.com/search-result.html?search_key=${encoded}`,
+        },
+        {
+          name: "TikTok Shop",
+          platform: "tiktok",
+          color: "#FE2C55",
+          bgColor: "#FE2C5514",
+          logo: "🎵",
+          searchUrl: `https://www.tiktok.com/search?q=${encoded}&type=product`,
+          shopUrl: `https://www.tiktok.com/search?q=${encoded}&type=product`,
+        },
+        {
+          name: "MercadoLibre",
+          platform: "mercadolibre",
+          color: "#FFE600",
+          bgColor: "#FFE60014",
+          logo: "🛒",
+          searchUrl: `https://listado.mercadolibre.com/${encoded}`,
+          shopUrl: `https://www.mercadolibre.com/${encoded}`,
+        },
+      ],
+      summary: `Busca directamente en cada tienda haciendo clic en los enlaces de abajo.`,
+      totalResults: 0,
+    });
   }
 }
 
-// Search using DuckDuckGo Lite (no API key needed, works from any server)
+// Helper: create a fetch with timeout using AbortController (compatible with all Node.js versions)
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal as any,
+    });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Source 1: DuckDuckGo Lite HTML scraping
 async function searchDuckDuckGo(query: string): Promise<any[]> {
   const results: any[] = [];
   const encodedQuery = encodeURIComponent(query + " price buy");
 
+  const res = await fetchWithTimeout(
+    `https://html.duckduckgo.com/html/?q=${encodedQuery}`,
+    {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    },
+    12000
+  );
+
+  if (!res.ok) return results;
+
+  const html = await res.text();
+
+  // Method 1: Standard DDG HTML result links
+  const resultRegex =
+    /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>.*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/gs;
+  const altRegex =
+    /<a[^>]+rel="nofollow"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>.*?<td[^>]+class="result__snippet"[^>]*>(.*?)<\/td>/gs;
+
+  const extractMatches = (regex: RegExp) => {
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const url = match[1].replace(/\/\/duckduckgo\.com\/l\//, "").replace(/uddg=([^&]*).*/, "$1");
+      const decodedUrl = decodeURIComponent(url);
+      const title = match[2].replace(/<[^>]*>/g, "").trim();
+      const snippet = match[3].replace(/<[^>]*>/g, "").trim();
+
+      if (title && decodedUrl && !decodedUrl.includes("duckduckgo.com")) {
+        results.push({ url: decodedUrl, title, snippet, imageUrl: "" });
+      }
+    }
+  };
+
+  extractMatches(resultRegex);
+  if (results.length === 0) extractMatches(altRegex);
+
+  // Method 2: Find all links with /l/?uddg= pattern
+  if (results.length === 0) {
+    const linkRegex = /<a[^>]+href="([^"]*(?:uddg=|l\/)[^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+    let m;
+    while ((m = linkRegex.exec(html)) !== null) {
+      const rawUrl = m[1];
+      const titleHtml = m[2];
+
+      let decodedUrl = "";
+      try {
+        const uddgMatch = rawUrl.match(/uddg=([^&]+)/);
+        if (uddgMatch) {
+          decodedUrl = decodeURIComponent(uddgMatch[1]);
+        } else {
+          decodedUrl = rawUrl;
+        }
+      } catch {
+        decodedUrl = rawUrl;
+      }
+
+      const title = titleHtml.replace(/<[^>]*>/g, "").trim();
+      if (title && decodedUrl && !decodedUrl.includes("duckduckgo.com") && decodedUrl.startsWith("http")) {
+        results.push({ url: decodedUrl, title, snippet: "", imageUrl: "" });
+      }
+    }
+  }
+
+  // Method 3: Find all outbound links in the results area
+  if (results.length === 0) {
+    // Look for URLs that contain known shopping domains
+    const shoppingDomains = [
+      "amazon.com", "aliexpress.com", "shein.com", "temu.com",
+      "tiktok.com", "mercadolibre.com", "ebay.com", "walmart.com",
+      "bestbuy.com", "target.com", "etsy.com", "walmart.com"
+    ];
+
+    const allLinksRegex = /href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+    let m;
+    while ((m = allLinksRegex.exec(html)) !== null) {
+      const rawUrl = m[1];
+      const titleHtml = m[2];
+
+      let finalUrl = rawUrl;
+      // Decode DDG redirect URLs
+      try {
+        const uddgMatch = rawUrl.match(/uddg=([^&]+)/);
+        if (uddgMatch) {
+          finalUrl = decodeURIComponent(uddgMatch[1]);
+        }
+      } catch {}
+
+      const title = titleHtml.replace(/<[^>]*>/g, "").trim();
+      if (title && title.length > 10 && finalUrl.startsWith("http")) {
+        const isShopping = shoppingDomains.some((d) => finalUrl.includes(d));
+        if (isShopping) {
+          results.push({ url: finalUrl, title, snippet: "", imageUrl: "" });
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+// Source 2: Google search scraping
+async function searchGoogle(query: string): Promise<any[]> {
+  const results: any[] = [];
+  const searchTerms = [
+    query + " price buy",
+    query + " site:amazon.com OR site:aliexpress.com OR site:shein.com OR site:temu.com price",
+  ];
+
+  for (const term of searchTerms) {
+    try {
+      const res = await fetchWithTimeout(
+        `https://www.google.com/search?q=${encodeURIComponent(term)}&num=15&hl=en`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            Accept: "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+        },
+        10000
+      );
+
+      if (!res.ok) continue;
+
+      const html = await res.text();
+
+      // Google changed their HTML structure, try multiple patterns
+      // Pattern 1: Standard search results
+      const patterns = [
+        // Modern Google: <a href="/url?q=..."> pattern
+        /<a[^>]+href="\/url\?q=([^"&]+)&[^"]*"[^>]*>([\s\S]*?)<\/a>/g,
+        // Direct href to shopping sites
+        /<a[^>]+href="(https?:\/\/(?:www\.)?(?:amazon|aliexpress|shein|temu|tiktok|mercadolibre|ebay|walmart|bestbuy)[^"]*)"[^>]*>([\s\S]*?)<\/a>/g,
+      ];
+
+      for (const pattern of patterns) {
+        let m;
+        pattern.lastIndex = 0;
+        while ((m = pattern.exec(html)) !== null) {
+          let url = m[1];
+          // Clean Google redirect URL
+          url = url.replace(/&sa=.*$/, "").replace(/&usg=.*$/, "");
+          if (url.startsWith("http") && !url.includes("google.com")) {
+            const title = m[2].replace(/<[^>]*>/g, "").trim();
+            if (title && title.length > 5) {
+              results.push({ url, title, snippet: "", imageUrl: "" });
+            }
+          }
+        }
+        if (results.length > 0) break;
+      }
+
+      if (results.length > 0) break;
+    } catch {
+      continue;
+    }
+  }
+
+  return results;
+}
+
+// Source 3: Bing search scraping
+async function searchBing(query: string): Promise<any[]> {
+  const results: any[] = [];
+
   try {
-    const res = await fetch(
-      `https://html.duckduckgo.com/html/?q=${encodedQuery}`,
+    const res = await fetchWithTimeout(
+      `https://www.bing.com/search?q=${encodeURIComponent(query + " price buy")}&count=15`,
       {
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          Accept: "text/html",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml",
           "Accept-Language": "en-US,en;q=0.9",
         },
-        signal: AbortSignal.timeout(10000),
-      }
+      },
+      10000
     );
 
     if (!res.ok) return results;
 
     const html = await res.text();
 
-    // Parse DuckDuckGo HTML results
+    // Bing result pattern
     const resultRegex =
-      /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>.*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/gs;
-    const altRegex =
-      /<a[^>]+rel="nofollow"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>.*?<td[^>]+class="result__snippet"[^>]*>(.*?)<\/td>/gs;
+      /<li[^>]+class="b_algo"[^>]*>[\s\S]*?<a[^>]+href="(https?:\/\/[^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/g;
 
-    const extractMatches = (regex: RegExp) => {
-      let match;
-      while ((match = regex.exec(html)) !== null) {
-        const url = match[1].replace(/\/\/duckduckgo\.com\/l\//, "").replace(/uddg=([^&]*).*/, "$1");
-        const decodedUrl = decodeURIComponent(url);
-        const title = match[2].replace(/<[^>]*>/g, "").trim();
-        const snippet = match[3].replace(/<[^>]*>/g, "").trim();
-
-        if (title && decodedUrl && !decodedUrl.includes("duckduckgo.com")) {
-          results.push({ url: decodedUrl, title, snippet, imageUrl: "" });
-        }
+    let m;
+    while ((m = resultRegex.exec(html)) !== null) {
+      const url = m[1];
+      const title = m[2].replace(/<[^>]*>/g, "").trim();
+      const snippet = m[3].replace(/<[^>]*>/g, "").trim();
+      if (title && url && !url.includes("bing.com") && !url.includes("microsoft.com")) {
+        results.push({ url, title, snippet, imageUrl: "" });
       }
-    };
+    }
 
-    extractMatches(resultRegex);
-    if (results.length === 0) extractMatches(altRegex);
-
-    // Also try simpler parsing
+    // Fallback: any links to shopping domains
     if (results.length === 0) {
-      const linkRegex = /<a[^>]+href="(\/l\/\?uddg=([^"]+))"[^>]*>(.*?)<\/a>/gs;
-      let m;
-      while ((m = linkRegex.exec(html)) !== null) {
-        const decodedUrl = decodeURIComponent(m[2]);
-        const title = m[3].replace(/<[^>]*>/g, "").trim();
-        if (title && decodedUrl && !decodedUrl.includes("duckduckgo.com")) {
-          // Try to get snippet from next sibling
-          const snippetIdx = html.indexOf(title) + title.length;
-          const snippetArea = html.substring(snippetIdx, snippetIdx + 500);
-          const snippetMatch = snippetArea.match(/class="result__snippet"[^>]*>(.*?)<\/a>/s);
-          const snippet = snippetMatch
-            ? snippetMatch[1].replace(/<[^>]*>/g, "").trim()
-            : "";
-          results.push({ url: decodedUrl, title, snippet, imageUrl: "" });
+      const shoppingDomains = [
+        "amazon.com", "aliexpress.com", "shein.com", "temu.com",
+        "tiktok.com", "mercadolibre.com", "ebay.com", "walmart.com",
+        "bestbuy.com", "target.com", "etsy.com",
+      ];
+
+      const linkRegex = /<a[^>]+href="(https?:\/\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+      let m2;
+      while ((m2 = linkRegex.exec(html)) !== null) {
+        const url = m2[1];
+        const title = m2[2].replace(/<[^>]*>/g, "").trim();
+        if (title && title.length > 10 && shoppingDomains.some((d) => url.includes(d))) {
+          results.push({ url, title, snippet: "", imageUrl: "" });
         }
       }
     }
   } catch (e) {
-    console.error("[Search] DuckDuckGo error:", e);
+    console.error("[Search] Bing error:", e);
   }
 
-  // Deduplicate by domain+path
-  const seen = new Set<string>();
-  return results.filter((r) => {
-    try {
-      const key = new URL(r.url).hostname + new URL(r.url).pathname;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  return results;
 }
 
 function detectPlatform(url: string, title: string): { platform: string; name: string } {
@@ -328,14 +616,14 @@ function hashStr(str: string): string {
 
 function generateSummary(results: ProductResult[], query: string): string {
   const priced = results.filter((r) => r.price > 0);
-  const platforms = [...new Set(results.map((r) => r.platformName))];
+  const platformNames = [...new Set(results.map((r) => r.platformName))];
 
   if (results.length === 0) {
-    return `No encontramos resultados para "${query}". Intenta con otro término o usa los enlaces directos de cada tienda abajo.`;
+    return `No encontramos resultados directamente, pero puedes buscar en cada tienda usando los enlaces de abajo.`;
   }
 
   if (priced.length === 0) {
-    return `Encontramos ${results.length} resultado(s) en ${platforms.join(", ")}. Los precios se muestran directamente en cada tienda — haz clic para verlos.`;
+    return `Encontramos ${results.length} resultado(s) en ${platformNames.join(", ")}. Los precios se muestran directamente en cada tienda — haz clic para verlos.`;
   }
 
   const min = Math.min(...priced.map((r) => r.price));
@@ -348,5 +636,5 @@ function generateSummary(results: ProductResult[], query: string): string {
   }
 
   const savings = max - min;
-  return `${priced.length} precios encontrados para "${query}" en ${platforms.join(", ")}. Rango: $${min.toFixed(2)} – $${max.toFixed(2)} | Promedio: $${avg.toFixed(2)} | Mejor precio: ${cheapest?.platformName} — ahorras hasta $${savings.toFixed(2)}`;
+  return `${priced.length} precios encontrados para "${query}" en ${platformNames.join(", ")}. Rango: $${min.toFixed(2)} - $${max.toFixed(2)} | Promedio: $${avg.toFixed(2)} | Mejor precio: ${cheapest?.platformName} — ahorras hasta $${savings.toFixed(2)}`;
 }

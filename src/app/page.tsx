@@ -603,29 +603,58 @@ export default function Home() {
                 </div>
               )}
 
-              {/* No Results */}
+              {/* No Results - but show platform links */}
               {!isLoading && searchResult && searchResult.results.length === 0 && (
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="text-center py-16"
+                  className="space-y-8 py-8"
                 >
-                  <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                    <Search className="h-8 w-8 text-gray-300" />
+                  <div className="text-center">
+                    <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                      <Search className="h-8 w-8 text-gray-300" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-2">
+                      No encontramos resultados directamente
+                    </h3>
+                    <p className="text-sm text-muted-foreground mb-6 max-w-md mx-auto">
+                      Pero puedes buscar directamente en cada tienda haciendo clic en los enlaces de abajo.
+                    </p>
                   </div>
-                  <h3 className="text-lg font-semibold text-gray-800 mb-2">
-                    No encontramos resultados
-                  </h3>
-                  <p className="text-sm text-muted-foreground mb-6 max-w-md mx-auto">
-                    Intenta con un término de búsqueda más general o verifica la ortografía.
-                  </p>
-                  <Button
-                    onClick={goHome}
-                    className="bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600"
-                  >
-                    <Search className="h-4 w-4 mr-2" />
-                    Intentar otra búsqueda
-                  </Button>
+
+                  {/* Platform links for direct search */}
+                  {searchResult.platformLinks && searchResult.platformLinks.length > 0 && (
+                    <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl p-5 border border-amber-100 max-w-2xl mx-auto">
+                      <p className="text-sm font-semibold text-zinc-700 mb-4 text-center">
+                        🔍 Busca &ldquo;{searchResult.query}&rdquo; directamente en cada tienda:
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {searchResult.platformLinks.map((link) => (
+                          <a
+                            key={link.platform}
+                            href={link.shopUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 px-4 py-3 bg-white rounded-xl border border-zinc-100 hover:border-amber-300 hover:shadow-md transition-all text-sm font-medium text-zinc-700 hover:text-zinc-900"
+                          >
+                            <span className="text-xl">{link.logo}</span>
+                            <span>{link.name}</span>
+                            <ExternalLink className="h-3.5 w-3.5 ml-auto text-zinc-400" />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="text-center">
+                    <Button
+                      onClick={goHome}
+                      className="bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600"
+                    >
+                      <Search className="h-4 w-4 mr-2" />
+                      Nueva búsqueda
+                    </Button>
+                  </div>
                 </motion.div>
               )}
             </motion.div>
