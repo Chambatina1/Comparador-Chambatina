@@ -20,13 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+// Using native HTML select to avoid Radix UI hydration issues
 import { CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/proxy";
 import { PROVINCIAS } from "@/lib/platforms";
 
@@ -218,15 +212,12 @@ export default function PublishPage() {
               </div>
               <div>
                 <Label className="text-sm font-semibold text-gray-800 mb-1.5 block">Moneda</Label>
-                <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger className="h-11 rounded-xl"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="USD">USD ($)</SelectItem>
-                    <SelectItem value="CUP">CUP</SelectItem>
-                    <SelectItem value="EUR">EUR</SelectItem>
-                    <SelectItem value="MLC">MLC</SelectItem>
-                  </SelectContent>
-                </Select>
+                <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="h-11 w-full px-3 rounded-xl border border-gray-200 bg-white text-gray-700 focus:ring-2 focus:ring-emerald-300">
+                  <option value="USD">USD ($)</option>
+                  <option value="CUP">CUP</option>
+                  <option value="EUR">EUR</option>
+                  <option value="MLC">MLC</option>
+                </select>
               </div>
             </div>
 
@@ -245,14 +236,12 @@ export default function PublishPage() {
                 <MapPin className="h-4 w-4 inline mr-1.5" />
                 Provincia <span className="text-red-500">*</span>
               </Label>
-              <Select value={province} onValueChange={setProvince}>
-                <SelectTrigger className="h-11 rounded-xl"><SelectValue placeholder="Selecciona provincia" /></SelectTrigger>
-                <SelectContent>
-                  {PROVINCIAS.map((prov) => (
-                    <SelectItem key={prov} value={prov}>{prov}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <select value={province} onChange={(e) => setProvince(e.target.value)} className="h-11 w-full px-3 rounded-xl border border-gray-200 bg-white text-gray-700 focus:ring-2 focus:ring-emerald-300">
+                <option value="">Selecciona provincia</option>
+                {PROVINCIAS.map((prov) => (
+                  <option key={prov} value={prov}>{prov}</option>
+                ))}
+              </select>
             </div>
 
             {/* Municipality */}
@@ -266,16 +255,12 @@ export default function PublishPage() {
               <Label className="text-sm font-semibold text-gray-800 mb-1.5 block">
                 Categoria <span className="text-red-500">*</span>
               </Label>
-              <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger className="h-11 rounded-xl"><SelectValue placeholder="Selecciona categoria" /></SelectTrigger>
-                <SelectContent>
-                  {categories.map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      {CATEGORY_LABELS[cat] || cat}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <select value={category} onChange={(e) => setCategory(e.target.value)} className="h-11 w-full px-3 rounded-xl border border-gray-200 bg-white text-gray-700 focus:ring-2 focus:ring-emerald-300">
+                <option value="">Selecciona categoria</option>
+                {categories.map((cat) => (
+                  <option key={cat} value={cat}>{CATEGORY_LABELS[cat] || cat}</option>
+                ))}
+              </select>
             </div>
 
             {/* Seller name */}

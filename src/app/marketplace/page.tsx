@@ -22,13 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+// Using native HTML select to avoid Radix UI hydration issues
 import {
   Dialog,
   DialogContent,
@@ -179,19 +173,16 @@ export default function MarketplacePage() {
           {/* Province filter */}
           <div className="flex items-center gap-2">
             <Filter className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-            <Select value={filterProvince} onValueChange={setFilterProvince}>
-              <SelectTrigger className="w-[200px] h-8 text-xs rounded-lg">
-                <SelectValue placeholder="Todas las provincias" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas las provincias</SelectItem>
-                {PROVINCIAS.map((prov) => (
-                  <SelectItem key={prov} value={prov}>
-                    {prov}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <select
+              value={filterProvince}
+              onChange={(e) => setFilterProvince(e.target.value)}
+              className="h-8 px-3 text-xs rounded-lg border border-gray-200 bg-white text-gray-700 focus:ring-2 focus:ring-emerald-300 focus:border-emerald-300"
+            >
+              <option value="all">Todas las provincias</option>
+              {PROVINCIAS.map((prov) => (
+                <option key={prov} value={prov}>{prov}</option>
+              ))}
+            </select>
           </div>
 
           {/* Category tabs */}

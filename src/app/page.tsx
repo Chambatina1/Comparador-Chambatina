@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+// Using native HTML select to avoid Radix UI hydration issues
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
 import { PROVINCIAS, trendingSearches } from "@/lib/platforms";
@@ -271,18 +271,13 @@ export default function Home() {
                   {searchResult.stats.provinces.length > 1 && (
                     <div className="flex items-center gap-2">
                       <Filter className="h-4 w-4 text-muted-foreground" />
-                      <Select value={filterProvince} onValueChange={setFilterProvince}>
-                        <SelectTrigger className="w-[200px] h-8 text-xs rounded-lg">
-                          <SelectValue placeholder="Todas las provincias" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Todas las provincias ({searchResult.totalResults})</SelectItem>
-                          {searchResult.stats.provinces.map((prov) => {
-                            const count = searchResult.results.filter((r) => r.province === prov).length;
-                            return <SelectItem key={prov} value={prov}>{prov} ({count})</SelectItem>;
-                          })}
-                        </SelectContent>
-                      </Select>
+                      <select value={filterProvince} onChange={(e) => setFilterProvince(e.target.value)} className="h-8 px-2 text-xs rounded-lg border border-gray-200 bg-white text-gray-700 focus:ring-2 focus:ring-emerald-300">
+                        <option value="all">Todas las provincias ({searchResult.totalResults})</option>
+                        {searchResult.stats.provinces.map((prov) => {
+                          const count = searchResult.results.filter((r) => r.province === prov).length;
+                          return <option key={prov} value={prov}>{prov} ({count})</option>;
+                        })}
+                      </select>
                     </div>
                   )}
                 </div>
