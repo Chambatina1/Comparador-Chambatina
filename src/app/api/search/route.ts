@@ -55,13 +55,15 @@ export async function GET() {
     });
     const html = await resp.text();
     const blocks = html.split('<li class="b_algo"');
-    const parsed = parseBingHTML(html);
+    // Show the raw second block (first result) so we can see the HTML structure
+    const rawBlock = blocks.length > 1 ? blocks[1].substring(0, 1000) : "no blocks";
+    // Also try to find h2 tags
+    const h2Matches = (html.match(/<h2[^>]*>[\s\S]*?<\/h2>/g) || []).slice(0, 3).map((m: string) => m.substring(0, 200));
     return NextResponse.json({
       status: resp.status,
-      htmlLength: html.length,
       blockCount: blocks.length - 1,
-      parsedCount: parsed.length,
-      parsed: parsed.slice(0, 3).map((r) => ({ title: r.title.substring(0, 50), url: r.url.substring(0, 80), host: r.host })),
+      rawBlock: rawBlock,
+      h2Samples: h2Matches,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message?.substring(0, 200) });
