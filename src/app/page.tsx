@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Loader2,
   ChevronDown,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +45,15 @@ type ViewMode = "home" | "results";
 interface SearchResult {
   query: string;
   results: ProductResult[];
+  platformLinks?: Array<{
+    name: string;
+    platform: string;
+    color: string;
+    bgColor: string;
+    logo: string;
+    searchUrl: string;
+    shopUrl: string;
+  }>;
   summary: string;
   totalResults: number;
 }
@@ -504,6 +514,28 @@ export default function Home() {
                     totalResults={searchResult.totalResults}
                     platformsFound={summaryStats.platformsFound}
                   />
+
+                  {/* Direct platform links - always shown */}
+                  {searchResult.platformLinks && searchResult.platformLinks.length > 0 && (
+                    <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl p-5 border border-amber-100">
+                      <p className="text-sm font-semibold text-zinc-700 mb-3">Buscar directamente en cada tienda:</p>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {searchResult.platformLinks.map((link) => (
+                          <a
+                            key={link.platform}
+                            href={link.shopUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 px-3 py-2.5 bg-white rounded-xl border border-zinc-100 hover:border-amber-300 hover:shadow-md transition-all text-sm font-medium text-zinc-700 hover:text-zinc-900"
+                          >
+                            <span className="text-lg">{link.logo}</span>
+                            <span>{link.name}</span>
+                            <ExternalLink className="h-3 w-3 ml-auto text-zinc-400" />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Filters & Sort */}
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">

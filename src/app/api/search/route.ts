@@ -1,230 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { query, imageUrl, url } = body;
-
-    if (!query && !imageUrl && !url) {
-      return NextResponse.json(
-        { error: "Escribe algo, pega un link o sube una foto" },
-        { status: 400 }
-      );
-    }
-
-    let searchQuery = query?.trim() || "";
-    let sourceUrl = url?.trim() || "";
-
-    // ============================================
-    // 1. If user pasted a URL, extract product info from it
-    // ============================================
-    if (sourceUrl && !searchQuery) {
-      const zai = await ZAI.create();
-      try {
-        // Try to extract product name from URL
-        const urlAnalysis = await zai.chat.completions.create({
-          messages: [
-            {
-              role: "system",
-              content: `Eres un experto en e-commerce. El usuario te da una URL de un producto.
-Tu trabajo es:
-1. Identificar el producto de la URL
-2. Devolver SOLO el nombre del producto en 3-8 palabras optimizado para buscar
-3. Si no puedes identificar el producto, devuelve un nombre de búsqueda genérico basado en la URL
-Responde SOLO con las palabras de búsqueda, nada más.`,
-            },
-            {
-              role: "user",
-              content: `URL: ${sourceUrl}\n\n¿Qué producto es este? Dime el nombre para buscarlo.`,
-            },
-          ],
-        });
-        searchQuery = urlAnalysis.choices[0]?.message?.content?.trim() || "";
-      } catch {
-        // Fallback: extract from URL path
-        const urlPath = new URL(sourceUrl).pathname;
-        searchQuery = urlPath
-          .replace(/[-_]/g, " ")
-          .replace(/\/dp\/|\/item\/|\/p\//g, " ")
-          .split("/")
-          .filter((w) => w.length > 2)
-          .slice(0, 6)
-          .join(" ");
-      }
-    }
-
-    // ============================================
-    // 2. If user uploaded an image, analyze it
-    // ============================================
-    if (imageUrl && !searchQuery) {
-      const zai = await ZAI.create();
-      try {
-        const analysis = await zai.chat.completions.create({
-          messages: [
-            {
-              role: "system",
-              content:
-                "Eres un experto en e-commerce. Describe el producto de la imagen en 3-6 palabras clave optimizadas para buscar en tiendas online. Responde SOLO con las palabras de búsqueda separadas por espacios, sin explicaciones.",
-            },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image_url",
-                  image_url: { url: imageUrl },
-                },
-                {
-                  type: "text",
-                  text: "Describe este producto brevemente para buscarlo:",
-                },
-              ],
-            },
-          ],
-        });
-        searchQuery = analysis.choices[0]?.message?.content?.trim() || "";
-      } catch {
-        searchQuery = "";
-      }
-    }
-
-    if (!searchQuery) {
-      return NextResponse.json(
-        { error: "No se pudo identificar el producto. Intenta con una descripción." },
-        { status: 400 }
-      );
-    }
-
-    // ============================================
-    // 3. Search across platforms using web search
-    // ============================================
-    const zai = await ZAI.create();
-
-    // Individual platform searches (more effective than site: operators)
-    const platformSearches = [
-      { query: `${searchQuery} buy price Amazon`, platformHint: "amazon" },
-      { query: `${searchQuery} comprar precio AliExpress`, platformHint: "aliexpress" },
-      { query: `${searchQuery} SHEIN shopping price`, platformHint: "shein" },
-      { query: `${searchQuery} Temu deal price`, platformHint: "temu" },
-      { query: `${searchQuery} TikTok Shop price`, platformHint: "tiktok" },
-      { query: `${searchQuery} MercadoLibre precio`, platformHint: "mercadolibre" },
-      // General searches for broader results
-      { query: `${searchQuery} best price comparison`, platformHint: "" },
-      { query: `${searchQuery} cheapest online store`, platformHint: "" },
-    ];
-
-    const searchPromises = platformSearches.map((s) =>
-      zai.functions
-        .invoke("web_search", {
-          query: s.query,
-          num: 10,
-        })
-        .then((results: any) => ({
-          results: results || [],
-          platformHint: s.platformHint,
-        }))
-        .catch(() => ({ results: [], platformHint: s.platformHint }))
-    );
-
-    const searchResponses = await Promise.all(searchPromises);
-
-    // ============================================
-    // 4. Use AI to extract structured product data from results
-    // ============================================
-    const allSnippets: string[] = [];
-    for (const response of searchResponses) {
-      const items = Array.isArray(response.results) ? response.results : [];
-      for (const item of items) {
-        const title = item.name || item.title || "";
-        const url = item.url || "";
-        const snippet = item.snippet || item.description || "";
-        if (title || url) {
-          allSnippets.push(`TITLE: ${title} | URL: ${url} | ${snippet}`);
-        }
-      }
-    }
-
-    // Use AI to parse results into structured products
-    let products: ProductResult[] = [];
-
-    if (allSnippets.length > 0) {
-      try {
-        const aiParse = await zai.chat.completions.create({
-          messages: [
-            {
-              role: "system",
-              content: `Eres un extractor de datos de productos. Dado un texto con resultados de búsqueda web, extrae productos reales con sus precios.
-
-Plataformas válidas: amazon, aliexpress, shein, temu, tiktok, mercadolibre, otra
-
-IMPORTANTE:
-- Solo incluye resultados que sean productos reales con precio
-- Si el precio no es claro, pon 0
-- Si no hay resultados con precio, devuelve un array vacío []
-- Responde SOLO con JSON válido, sin markdown, sin explicaciones
-- Máximo 15 productos
-
-Formato JSON:
-[{"name":"nombre del producto","price":29.99,"platform":"amazon","url":"https://..."}]`,
-            },
-            {
-              role: "user",
-              content: `Buscando: "${searchQuery}"\n\nResultados:\n${allSnippets.slice(0, 30).join("\n")}`,
-            },
-          ],
-        });
-
-        let aiContent = aiParse.choices[0]?.message?.content?.trim() || "[]";
-        // Clean markdown code blocks if present
-        aiContent = aiContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-
-        const parsed = JSON.parse(aiContent);
-        if (Array.isArray(parsed)) {
-          products = parsed.map((p: any, i: number) => ({
-            id: `prod-${i}-${Date.now()}`,
-            name: p.name || "Producto",
-            price: typeof p.price === "number" ? p.price : 0,
-            priceFormatted:
-              p.price > 0 ? `$${p.price.toFixed(2)}` : "Ver precio",
-            platform: p.platform || "otra",
-            platformName: getPlatformName(p.platform),
-            url: p.url || "#",
-            image: p.image || "",
-            rating: p.rating || 0,
-            isBestPrice: false,
-          }));
-        }
-      } catch (parseErr) {
-        console.error("[Search] AI parse error:", parseErr);
-        // Fallback: use raw results
-        products = extractFromRawResults(searchResponses, searchQuery);
-      }
-    }
-
-    // If AI couldn't extract anything, use raw results
-    if (products.length === 0) {
-      products = extractFromRawResults(searchResponses, searchQuery);
-    }
-
-    // Sort and mark best price
-    const sorted = sortResults(products);
-    const summary = generateSummary(sorted, searchQuery);
-
-    return NextResponse.json({
-      query: searchQuery,
-      results: sorted,
-      summary,
-      totalResults: sorted.length,
-    });
-  } catch (error) {
-    console.error("[Search] Error:", error);
-    const errMsg = error instanceof Error ? error.message : String(error);
-    return NextResponse.json(
-      { error: "Error al buscar: " + errMsg },
-      { status: 500 }
-    );
-  }
-}
+export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 interface ProductResult {
   id: string;
@@ -239,125 +16,337 @@ interface ProductResult {
   isBestPrice: boolean;
 }
 
-function getPlatformName(platform: string): string {
-  const names: Record<string, string> = {
-    amazon: "Amazon",
-    aliexpress: "AliExpress",
-    shein: "SHEIN",
-    temu: "Temu",
-    tiktok: "TikTok Shop",
-    mercadolibre: "MercadoLibre",
-    otra: "Otra tienda",
-  };
-  return names[platform?.toLowerCase()] || "Otra tienda";
-}
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { query, url } = body;
 
-function extractFromRawResults(
-  searchResponses: any[],
-  query: string
-): ProductResult[] {
-  const products: ProductResult[] = [];
-  const seen = new Set<string>();
+    if (!query && !url) {
+      return NextResponse.json(
+        { error: "Escribe algo, pega un link o sube una foto" },
+        { status: 400 }
+      );
+    }
 
-  const platformPatterns: Array<{
-    pattern: RegExp;
-    platform: string;
-  }> = [
-    { pattern: /amazon\./i, platform: "amazon" },
-    { pattern: /mercadolibre|mercadolivre/i, platform: "mercadolibre" },
-    { pattern: /aliexpress/i, platform: "aliexpress" },
-    { pattern: /temu/i, platform: "temu" },
-    { pattern: /shein/i, platform: "shein" },
-    { pattern: /tiktok/i, platform: "tiktok" },
-  ];
+    let searchQuery = (query || "").trim();
+    let sourceUrl = (url || "").trim();
 
-  for (const response of searchResponses) {
-    const items = Array.isArray(response.results)
-      ? response.results
-      : [];
-    for (const item of items) {
-      const title = item.name || item.title || "";
-      const itemUrl = item.url || "";
-      const snippet = item.snippet || item.description || "";
-
-      if (!title && !itemUrl) continue;
-      if (seen.has(itemUrl)) continue;
-      seen.add(itemUrl);
-
-      // Detect platform from URL
-      let platform = "otra";
-      for (const pp of platformPatterns) {
-        if (pp.pattern.test(itemUrl)) {
-          platform = pp.platform;
-          break;
-        }
+    // If user pasted a URL, extract search terms from it
+    if (sourceUrl && !searchQuery) {
+      try {
+        const urlObj = new URL(sourceUrl);
+        const pathParts = urlObj.pathname
+          .replace(/[-_]/g, " ")
+          .replace(/\/dp\/|\/item\/|\/p\/|\/product\//gi, " ")
+          .split("/")
+          .filter((w) => w.length > 2);
+        searchQuery = pathParts.slice(0, 6).join(" ");
+      } catch {
+        searchQuery = sourceUrl.replace(/https?:\/\/(www\.)?/i, "").split("/")[1] || "";
       }
+    }
 
-      // Extract price
-      const text = title + " " + snippet;
-      const priceMatch = text.match(/\$\s?([\d,]+\.?\d*)/);
-      const price = priceMatch ? parseFloat(priceMatch[1].replace(/,/g, "")) : 0;
+    if (!searchQuery || searchQuery.length < 2) {
+      return NextResponse.json(
+        { error: "No se pudo identificar el producto. Intenta con una descripción más clara." },
+        { status: 400 }
+      );
+    }
 
-      // Clean name
-      let name = title
-        .replace(/\s*[-|]\s*(Amazon|AliExpress|Temu|SHEIN|MercadoLibre|TikTok).*$/i, "")
-        .trim();
-      if (name.length > 100) name = name.substring(0, 97) + "...";
+    // Build direct search URLs for each platform
+    const platformLinks = [
+      {
+        name: "Amazon",
+        platform: "amazon",
+        color: "#FF9900",
+        bgColor: "#FF990014",
+        logo: "📦",
+        searchUrl: `https://www.amazon.com/s?k=${encodeURIComponent(searchQuery)}&tag=comparador-20`,
+        shopUrl: `https://www.amazon.com/s?k=${encodeURIComponent(searchQuery)}`,
+      },
+      {
+        name: "AliExpress",
+        platform: "aliexpress",
+        color: "#FF4747",
+        bgColor: "#FF474714",
+        logo: "🛍️",
+        searchUrl: `https://www.aliexpress.com/wholesale?SearchText=${encodeURIComponent(searchQuery)}`,
+        shopUrl: `https://www.aliexpress.com/wholesale?SearchText=${encodeURIComponent(searchQuery)}`,
+      },
+      {
+        name: "SHEIN",
+        platform: "shein",
+        color: "#1A1A1A",
+        bgColor: "#1A1A1A14",
+        logo: "👗",
+        searchUrl: `https://www.shein.com/${encodeURIComponent(searchQuery)}-c-2260.html`,
+        shopUrl: `https://www.shein.com/${encodeURIComponent(searchQuery)}-c-2260.html`,
+      },
+      {
+        name: "Temu",
+        platform: "temu",
+        color: "#FB6F20",
+        bgColor: "#FB6F2014",
+        logo: "🧡",
+        searchUrl: `https://www.temu.com/search-result.html?search_key=${encodeURIComponent(searchQuery)}`,
+        shopUrl: `https://www.temu.com/search-result.html?search_key=${encodeURIComponent(searchQuery)}`,
+      },
+      {
+        name: "TikTok Shop",
+        platform: "tiktok",
+        color: "#FE2C55",
+        bgColor: "#FE2C5514",
+        logo: "🎵",
+        searchUrl: `https://www.tiktok.com/search?q=${encodeURIComponent(searchQuery)}&type=product`,
+        shopUrl: `https://www.tiktok.com/search?q=${encodeURIComponent(searchQuery)}&type=product`,
+      },
+      {
+        name: "MercadoLibre",
+        platform: "mercadolibre",
+        color: "#FFE600",
+        bgColor: "#FFE60014",
+        logo: "🛒",
+        searchUrl: `https://listado.mercadolibre.com/${encodeURIComponent(searchQuery)}`,
+        shopUrl: `https://www.mercadolibre.com/${encodeURIComponent(searchQuery)}`,
+      },
+    ];
+
+    // Try to fetch actual product data from DuckDuckGo HTML (no API key needed)
+    const ddgResults = await searchDuckDuckGo(searchQuery);
+
+    // Parse results and match with platforms
+    const products: ProductResult[] = [];
+
+    for (const result of ddgResults) {
+      const detectedPlatform = detectPlatform(result.url, result.title);
+      const priceInfo = extractPrice(result.title + " " + result.snippet);
 
       products.push({
-        id: `raw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        name: name || query,
-        price,
-        priceFormatted: price > 0 ? `$${price.toFixed(2)}` : "Ver precio",
-        platform,
-        platformName: getPlatformName(platform),
-        url: itemUrl,
-        image: "",
+        id: `ddg-${hashStr(result.url)}`,
+        name: cleanTitle(result.title),
+        price: priceInfo.amount,
+        priceFormatted: priceInfo.amount > 0 ? `$${priceInfo.amount.toFixed(2)}` : "Ver precio en tienda",
+        platform: detectedPlatform.platform,
+        platformName: detectedPlatform.name,
+        url: result.url,
+        image: result.imageUrl || "",
         rating: 0,
         isBestPrice: false,
       });
     }
-  }
 
-  return products;
+    // Mark best price
+    const pricedProducts = products.filter((p) => p.price > 0);
+    if (pricedProducts.length > 0) {
+      const minPrice = Math.min(...pricedProducts.map((p) => p.price));
+      for (const p of products) {
+        p.isBestPrice = p.price > 0 && p.price === minPrice;
+      }
+    }
+
+    // Sort: with prices first, then by price
+    const sorted = products.sort((a, b) => {
+      if (a.price > 0 && b.price === 0) return -1;
+      if (a.price === 0 && b.price > 0) return 1;
+      if (a.price > 0 && b.price > 0) return a.price - b.price;
+      return 0;
+    });
+
+    const summary = generateSummary(sorted, searchQuery);
+
+    return NextResponse.json({
+      query: searchQuery,
+      results: sorted,
+      platformLinks,
+      summary,
+      totalResults: sorted.length,
+    });
+  } catch (error) {
+    console.error("[Search] Error:", error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    return NextResponse.json(
+      { error: "Error al buscar: " + errMsg },
+      { status: 500 }
+    );
+  }
 }
 
-function sortResults(results: ProductResult[]): ProductResult[] {
-  const platformOrder = ["amazon", "aliexpress", "shein", "temu", "tiktok", "mercadolibre", "otra"];
+// Search using DuckDuckGo Lite (no API key needed, works from any server)
+async function searchDuckDuckGo(query: string): Promise<any[]> {
+  const results: any[] = [];
+  const encodedQuery = encodeURIComponent(query + " price buy");
 
-  return results.sort((a, b) => {
-    // Products with prices first
-    if (a.price > 0 && b.price === 0) return -1;
-    if (a.price === 0 && b.price > 0) return 1;
-    // Then by price ascending
-    if (a.price > 0 && b.price > 0) return a.price - b.price;
-    // Then by platform order
-    const aIdx = platformOrder.indexOf(a.platform);
-    const bIdx = platformOrder.indexOf(b.platform);
-    return aIdx - bIdx;
+  try {
+    const res = await fetch(
+      `https://html.duckduckgo.com/html/?q=${encodedQuery}`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "text/html",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+
+    if (!res.ok) return results;
+
+    const html = await res.text();
+
+    // Parse DuckDuckGo HTML results
+    const resultRegex =
+      /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>.*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/gs;
+    const altRegex =
+      /<a[^>]+rel="nofollow"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>.*?<td[^>]+class="result__snippet"[^>]*>(.*?)<\/td>/gs;
+
+    const extractMatches = (regex: RegExp) => {
+      let match;
+      while ((match = regex.exec(html)) !== null) {
+        const url = match[1].replace(/\/\/duckduckgo\.com\/l\//, "").replace(/uddg=([^&]*).*/, "$1");
+        const decodedUrl = decodeURIComponent(url);
+        const title = match[2].replace(/<[^>]*>/g, "").trim();
+        const snippet = match[3].replace(/<[^>]*>/g, "").trim();
+
+        if (title && decodedUrl && !decodedUrl.includes("duckduckgo.com")) {
+          results.push({ url: decodedUrl, title, snippet, imageUrl: "" });
+        }
+      }
+    };
+
+    extractMatches(resultRegex);
+    if (results.length === 0) extractMatches(altRegex);
+
+    // Also try simpler parsing
+    if (results.length === 0) {
+      const linkRegex = /<a[^>]+href="(\/l\/\?uddg=([^"]+))"[^>]*>(.*?)<\/a>/gs;
+      let m;
+      while ((m = linkRegex.exec(html)) !== null) {
+        const decodedUrl = decodeURIComponent(m[2]);
+        const title = m[3].replace(/<[^>]*>/g, "").trim();
+        if (title && decodedUrl && !decodedUrl.includes("duckduckgo.com")) {
+          // Try to get snippet from next sibling
+          const snippetIdx = html.indexOf(title) + title.length;
+          const snippetArea = html.substring(snippetIdx, snippetIdx + 500);
+          const snippetMatch = snippetArea.match(/class="result__snippet"[^>]*>(.*?)<\/a>/s);
+          const snippet = snippetMatch
+            ? snippetMatch[1].replace(/<[^>]*>/g, "").trim()
+            : "";
+          results.push({ url: decodedUrl, title, snippet, imageUrl: "" });
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[Search] DuckDuckGo error:", e);
+  }
+
+  // Deduplicate by domain+path
+  const seen = new Set<string>();
+  return results.filter((r) => {
+    try {
+      const key = new URL(r.url).hostname + new URL(r.url).pathname;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    } catch {
+      return false;
+    }
   });
+}
+
+function detectPlatform(url: string, title: string): { platform: string; name: string } {
+  const patterns: Array<{ re: RegExp; platform: string; name: string }> = [
+    { re: /amazon\./i, platform: "amazon", name: "Amazon" },
+    { re: /mercadolibre|mercadolivre/i, platform: "mercadolibre", name: "MercadoLibre" },
+    { re: /aliexpress/i, platform: "aliexpress", name: "AliExpress" },
+    { re: /temu/i, platform: "temu", name: "Temu" },
+    { re: /shein/i, platform: "shein", name: "SHEIN" },
+    { re: /tiktok/i, platform: "tiktok", name: "TikTok Shop" },
+    { re: /ebay/i, platform: "ebay", name: "eBay" },
+    { re: /walmart/i, platform: "walmart", name: "Walmart" },
+    { re: /target/i, platform: "target", name: "Target" },
+    { re: /bestbuy/i, platform: "bestbuy", name: "Best Buy" },
+  ];
+
+  const text = url + " " + title;
+  for (const p of patterns) {
+    if (p.re.test(text)) return { platform: p.platform, name: p.name };
+  }
+
+  return { platform: "otra", name: "Otra tienda" };
+}
+
+function extractPrice(text: string): { amount: number; formatted: string } {
+  const patterns = [
+    /\$\s?([\d,]+\.?\d*)/g,
+    /USD\s?([\d,]+\.?\d*)/gi,
+    /([\d,]+\.?\d*)\s?USD/gi,
+    /([\d,]+\.?\d*)\s?EUR/gi,
+    /€\s?([\d,]+\.?\d*)/g,
+    /R\$\s?([\d,]+\.?\d*)/g,
+    /COP\s?\$\s?([\d,]+\.?\d*)/gi,
+    /MXN\s?\$\s?([\d,]+\.?\d*)/gi,
+  ];
+
+  let bestAmount = 0;
+  let bestFormatted = "";
+
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      const numStr = match[1].replace(/,/g, "");
+      const amount = parseFloat(numStr);
+      if (amount > 0 && amount < 999999 && (!bestAmount || amount < bestAmount)) {
+        bestAmount = amount;
+        bestFormatted = match[0].trim();
+      }
+    }
+  }
+
+  return bestAmount > 0 ? { amount: bestAmount, formatted: bestFormatted } : { amount: 0, formatted: "" };
+}
+
+function cleanTitle(title: string): string {
+  let clean = title
+    .replace(/\s*[-|–—]\s*(Amazon|AliExpress|Temu|SHEIN|MercadoLibre|TikTok|eBay|Walmart).*$/i, "")
+    .replace(/\s*[-|–—]\s*$/, "")
+    .replace(/<[^>]*>/g, "")
+    .trim();
+  if (clean.length > 120) clean = clean.substring(0, 117) + "...";
+  return clean || title.substring(0, 80);
+}
+
+function hashStr(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
 }
 
 function generateSummary(results: ProductResult[], query: string): string {
   const priced = results.filter((r) => r.price > 0);
+  const platforms = [...new Set(results.map((r) => r.platformName))];
+
+  if (results.length === 0) {
+    return `No encontramos resultados para "${query}". Intenta con otro término o usa los enlaces directos de cada tienda abajo.`;
+  }
 
   if (priced.length === 0) {
-    const platforms = [...new Set(results.map((r) => r.platformName))];
-    if (platforms.length > 0) {
-      return `Encontramos ${results.length} resultados para "${query}" en ${platforms.join(", ")}. Los precios no se pudieron extraer automáticamente — haz clic en "Ver precio" para ver el precio real en cada tienda.`;
-    }
-    return `No se encontraron resultados para "${query}" en las plataformas analizadas. Intenta con otro término de búsqueda.`;
+    return `Encontramos ${results.length} resultado(s) en ${platforms.join(", ")}. Los precios se muestran directamente en cada tienda — haz clic para verlos.`;
   }
 
   const min = Math.min(...priced.map((r) => r.price));
   const max = Math.max(...priced.map((r) => r.price));
-  const avg = priced.reduce((sum, r) => sum + r.price, 0) / priced.length;
   const cheapest = priced.find((r) => r.price === min);
+  const avg = priced.reduce((s, r) => s + r.price, 0) / priced.length;
 
   if (priced.length === 1) {
-    return `Encontramos 1 resultado para "${query}" en ${cheapest?.platformName}: $${min.toFixed(2)}`;
+    return `Encontramos 1 precio para "${query}": $${min.toFixed(2)} en ${cheapest?.platformName}.`;
   }
 
   const savings = max - min;
-  return `Encontramos ${priced.length} precios para "${query}". Rango: $${min.toFixed(2)} - $${max.toFixed(2)} | Promedio: $${avg.toFixed(2)} | El más barato está en ${cheapest?.platformName} — ahorras hasta $${savings.toFixed(2)}`;
+  return `${priced.length} precios encontrados para "${query}" en ${platforms.join(", ")}. Rango: $${min.toFixed(2)} – $${max.toFixed(2)} | Promedio: $${avg.toFixed(2)} | Mejor precio: ${cheapest?.platformName} — ahorras hasta $${savings.toFixed(2)}`;
 }
