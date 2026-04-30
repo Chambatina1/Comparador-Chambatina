@@ -55,15 +55,17 @@ export async function GET() {
     });
     const html = await resp.text();
     const blocks = html.split('<li class="b_algo"');
-    // Show the raw second block (first result) so we can see the HTML structure
-    const rawBlock = blocks.length > 1 ? blocks[1].substring(0, 1000) : "no blocks";
-    // Also try to find h2 tags
-    const h2Matches = (html.match(/<h2[^>]*>[\s\S]*?<\/h2>/g) || []).slice(0, 3).map((m: string) => m.substring(0, 200));
+    // Find the first <a> inside the first <h2> in the first block
+    const firstBlock = blocks.length > 1 ? blocks[1] : "";
+    const h2Idx = firstBlock.indexOf("<h2");
+    const afterH2 = h2Idx >= 0 ? firstBlock.substring(h2Idx, h2Idx + 800) : "no h2 found";
+    // Also test the regex
+    const h2Match = firstBlock.match(/<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/);
     return NextResponse.json({
       status: resp.status,
       blockCount: blocks.length - 1,
-      rawBlock: rawBlock,
-      h2Samples: h2Matches,
+      afterH2: afterH2,
+      regexMatch: h2Match ? { url: h2Match[1].substring(0, 100), title: h2Match[2].substring(0, 60) } : null,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message?.substring(0, 200) });
