@@ -55,11 +55,13 @@ export async function GET() {
     });
     const html = await resp.text();
     const blocks = html.split('<li class="b_algo"');
+    const parsed = parseBingHTML(html);
     return NextResponse.json({
       status: resp.status,
       htmlLength: html.length,
       blockCount: blocks.length - 1,
-      firstBlock: blocks.length > 1 ? blocks[1].substring(0, 500) : "none",
+      parsedCount: parsed.length,
+      parsed: parsed.slice(0, 3).map((r) => ({ title: r.title.substring(0, 50), url: r.url.substring(0, 80), host: r.host })),
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message?.substring(0, 200) });
@@ -239,42 +241,46 @@ function parseBingHTML(html: string): RawResult[] {
   const results: RawResult[] = [];
 
   // Bing results are in <li class="b_algo"> blocks
-  // Each has an <h2><a href="URL">title</a></h2> and <p class="b_lineclamp...">snippet</p>
+  // Each has an <h2><a href="URL">title</a></h2> and optionally <p class="b_lineclamp...">snippet</p>
   const blocks = html.split(/<li class="b_algo"/);
 
   for (const block of blocks.slice(1)) {
     try {
-      // Extract title and URL from <h2><a href="URL">title</a></h2>
-      const titleMatch = block.match(/<h2[^>]*>\s*<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>\s*<\/h2>/);
-      if (!titleMatch) continue;
+      // Extract ALL links from the block, find the main result link (in <h2>)
+      // The <h2> link is the main result, it contains the actual title
+      const h2Match = block.match(/<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/);
+      if (!h2Match) continue;
 
-      const rawUrl = titleMatch[1];
-      let title = titleMatch[2].replace(/<[^>]*>/g, "").trim();
+      const rawUrl = h2Match[1];
+      let title = h2Match[2].replace(/<[^>]*>/g, "").trim();
       if (!title || title.length < 5) continue;
 
-      // Extract snippet
+      // Extract snippet from <p class="b_lineclamp...">
       let snippet = "";
       const snippetMatch = block.match(/<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/);
       if (snippetMatch) {
         snippet = snippetMatch[1].replace(/<[^>]*>/g, "").trim();
       }
 
-      // Extract URL (Bing redirects through bing.com/ck/a?...&u=ENCODED_REAL_URL)
+      // Decode Bing redirect URL
       let realUrl = rawUrl;
-      // The URL is URL-encoded HTML entities - first decode those
-      let cleanUrl = rawUrl.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-      // Now extract the 'u' parameter which contains base64-encoded real URL
+      // First decode HTML entities in the URL
+      let cleanUrl = rawUrl.replace(/&amp;/g, "&").replace(/&#0183;/g, "·");
+      // Extract the 'u' parameter (base64-encoded real URL)
       const uMatch = cleanUrl.match(/[&?]u=([a-zA-Z0-9_-]+)/);
       if (uMatch) {
-        try { realUrl = Buffer.from(uMatch[1], "base64").toString("utf-8"); } catch {}
+        try {
+          const decoded = Buffer.from(uMatch[1], "base64").toString("utf-8");
+          if (decoded.startsWith("http")) realUrl = decoded;
+        } catch {}
       }
 
       // Extract host
       let host = "";
       try { host = new URL(realUrl).hostname.replace("www.", ""); } catch {}
 
-      // Skip non-Cuba results early based on host
-      if (host && !isLikelyCubaHost(host, title, snippet)) continue;
+      // Skip Bing redirect URLs
+      if (host.includes("bing.com") && !host.includes("bing.com/ck/")) continue;
 
       results.push({ title, snippet, url: realUrl, host });
     } catch {
