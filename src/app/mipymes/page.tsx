@@ -72,7 +72,9 @@ export default function MipymesPage() {
         if (res.ok && !cancelled) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
-            setCategories(data);
+            // Proxy returns objects {id, name, icon} — extract just the IDs
+            const cats = data.map((c: any) => (typeof c === 'string' ? c : c.id)).filter(Boolean);
+            if (cats.length > 0) setCategories(cats);
           }
         }
       } catch {

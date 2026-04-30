@@ -69,7 +69,11 @@ export default function RegisterMipymePage() {
         if (res.ok) return res.json();
       })
       .then((data) => {
-        if (Array.isArray(data) && data.length > 0) setCategories(data);
+        if (Array.isArray(data) && data.length > 0) {
+          // Proxy returns objects {id, name, icon} — extract just the IDs
+          const cats = data.map((c: any) => (typeof c === 'string' ? c : c.id)).filter(Boolean);
+          if (cats.length > 0) setCategories(cats);
+        }
       })
       .catch(() => {});
   }, []);
