@@ -3,7 +3,7 @@
 import React, { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Search, ArrowLeft, Loader2, ExternalLink, Phone, MapPin, Calendar, Users, Tag, Crown, Filter, ChevronDown
+  Search, ArrowLeft, Loader2, ExternalLink, Phone, MapPin, Calendar, Users, Tag, Crown, Filter, ChevronDown, Globe, Info
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +38,7 @@ interface SearchResult {
     withDate: number;
     pricedCount: number;
     minPrice: number;
+    method: string;
   };
 }
 
@@ -259,6 +260,10 @@ export default function Home() {
                           Desde ${searchResult.stats.minPrice.toLocaleString("es-CU")}
                         </Badge>
                       )}
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground ml-auto">
+                        <Globe className="h-3 w-3" />
+                        <span>{searchResult.stats.method === "SDK + AI" ? "Búsqueda con IA" : "Búsqueda web"}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -460,9 +465,15 @@ export default function Home() {
                     <Search className="h-8 w-8 text-gray-300" />
                   </div>
                   <h3 className="text-lg font-semibold text-gray-800 mb-2">No encontramos &quot;{searchResult.query}&quot;</h3>
-                  <p className="text-sm text-muted-foreground mb-6 max-w-md mx-auto">
-                    Intenta con otro término o verifica la ortografía.
+                  <p className="text-sm text-muted-foreground mb-4 max-w-md mx-auto">
+                    No encontramos publicaciones de venta en Cuba para este producto.
                   </p>
+                  <div className="flex flex-col items-center gap-2 mb-6 max-w-sm mx-auto">
+                    <div className="flex items-start gap-2 text-xs text-muted-foreground bg-blue-50 border border-blue-100 rounded-lg p-3">
+                      <Info className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                      <span>Buscamos en grupos de Facebook como &quot;Ventas La Habana&quot;, &quot;Ventas Pinar&quot; y más. Los grupos privados no son accesibles desde la web. Intenta con palabras más específicas.</span>
+                    </div>
+                  </div>
                   <Button onClick={goHome} className="bg-emerald-600 hover:bg-emerald-700">
                     <Search className="h-4 w-4 mr-2" /> Nueva búsqueda
                   </Button>
