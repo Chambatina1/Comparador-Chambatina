@@ -184,7 +184,7 @@ async function searchBing(query: string): Promise<RawResult[]> {
     queries.map(async (q) => {
       try {
         const encoded = encodeURIComponent(q);
-        const resp = await fetch(`https://www.bing.com/search?q=${encoded}&count=20&setlang=es`, {
+        const resp = await fetch(`https://www.bing.com/search?q=${encoded}&count=20&setlang=es&cc=cu`, {
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml",
@@ -233,7 +233,10 @@ function parseBingHTML(html: string): RawResult[] {
 
       // Extract URL (Bing redirects through bing.com/ck/a?...&u=ENCODED_REAL_URL)
       let realUrl = rawUrl;
-      const uMatch = rawUrl.match(/[&?]u=([a-zA-Z0-9_-]+)/);
+      // The URL is URL-encoded HTML entities - first decode those
+      let cleanUrl = rawUrl.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+      // Now extract the 'u' parameter which contains base64-encoded real URL
+      const uMatch = cleanUrl.match(/[&?]u=([a-zA-Z0-9_-]+)/);
       if (uMatch) {
         try { realUrl = Buffer.from(uMatch[1], "base64").toString("utf-8"); } catch {}
       }
@@ -355,21 +358,20 @@ function isCubaRelevant(r: RawResult, query: string): boolean {
   const text = `${r.title} ${r.snippet} ${r.url} ${r.host}`.toLowerCase();
   const qLower = query.toLowerCase();
 
-  // Must mention the product somehow OR be from a Cuba marketplace
-  const mentionsProduct = text.includes(qLower.split(" ")[0]) || r.title.toLowerCase().includes(qLower.split(" ")[0]);
-  const isCubaMarketplace = r.host.includes("revolico") || r.host.includes("bachecubano") ||
-    r.host.includes("1cuba") || r.host.includes("timbri") || r.host.includes("dimecuba") ||
-    r.host.includes("facebook.com") || r.host.includes("fb.com");
+  // Since we use cc=cu, most results are already Cuba-focused
+  // Just check that it's at least somewhat relevant to the product
+  const qWords = qLower.split(" ").filter((w) => w.length > 2);
+  const matchCount = qWords.filter((w) => text.includes(w)).length;
 
-  if (isCubaMarketplace && mentionsProduct) return true;
+  // If most query words match, it's relevant
+  if (qWords.length > 0 && matchCount >= Math.max(1, Math.floor(qWords.length * 0.5))) return true;
 
-  // Must contain Cuba keywords
-  let cubaScore = 0;
-  for (const kw of ["cuba", "cubano", "cubana", "habana", "pinar", "holguin", "santiago",
-    "villa clara", "camaguey", "matanzas", "ventas", "revolico", "usd", "cup"]) {
-    if (text.includes(kw)) cubaScore++;
-  }
-  return cubaScore >= 2 && mentionsProduct;
+  // Always allow known Cuba marketplaces
+  if (r.host.includes("revolico") || r.host.includes("bachecubano") || r.host.includes("1cuba")) return true;
+  if (r.host.includes("timbri") || r.host.includes("dimecuba") || r.host.includes("cibercafe")) return true;
+  if (r.host.includes("facebook.com") || r.host.includes("fb.com")) return true;
+
+  return false;
 }
 
 // ===== EXTRACTION HELPERS =====
