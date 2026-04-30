@@ -208,28 +208,36 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
-// DuckDuckGo Lite HTML scraping
+// DuckDuckGo Lite HTML scraping using POST (more reliable from cloud servers)
 async function searchDuckDuckGoLite(query: string): Promise<any[]> {
   const results: any[] = [];
 
   // Search with shopping-focused terms
   const searchTerms = [
     `${query} price buy`,
-    `${query} site:amazon.com OR site:aliexpress.com OR site:temu.com OR site:shein.com`,
+    `${query} best price`,
+    `${query} site:amazon.com OR site:aliexpress.com OR site:temu.com`,
   ];
 
   for (const term of searchTerms) {
     try {
-      const encodedQuery = encodeURIComponent(term);
+      // Use POST method (DDG Lite form submit) - harder to block than GET
+      const formData = new URLSearchParams();
+      formData.append("q", term);
 
       const res = await fetchWithTimeout(
-        `https://lite.duckduckgo.com/lite/?q=${encodedQuery}`,
+        `https://lite.duckduckgo.com/lite/`,
         {
+          method: "POST",
           headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            Accept: "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
+            "Content-Type": "application/x-www-form-urlencoded",
+            Origin: "https://lite.duckduckgo.com",
+            Referer: "https://lite.duckduckgo.com/",
           },
+          body: formData.toString(),
         },
         15000
       );
@@ -237,19 +245,15 @@ async function searchDuckDuckGoLite(query: string): Promise<any[]> {
       if (!res.ok) continue;
 
       const html = await res.text();
+      console.log("[Search] DDG Lite response length:", html.length);
 
-      // Parse DDG Lite HTML structure
-      // Results are in <tr> rows, every 4 rows = 1 result:
-      //   Row 0: Number + link (contains <a href="//duckduckgo.com/l/?uddg=ENCODED_URL">TITLE</a>)
-      //   Row 1: Snippet description
-      //   Row 2: URL display
-      //   Row 3: Separator (empty)
+      // Method 1: Parse <tr> rows (standard DDG Lite format)
       const allRows = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || [];
-
+      
       for (let i = 0; i < allRows.length - 2; i++) {
         const row = allRows[i];
 
-        // Check if this row has a DDG redirect link (uddg=)
+        // Look for DDG redirect links (uddg=)
         const linkMatch = row.match(/<a[^>]+href="([^"]*(?:uddg=)[^"]*)"[^>]*>([\s\S]*?)<\/a>/);
         if (!linkMatch) continue;
 
@@ -267,14 +271,25 @@ async function searchDuckDuckGoLite(query: string): Promise<any[]> {
 
         if (!decodedUrl || decodedUrl.includes("duckduckgo.com")) continue;
 
-        const title = titleHtml.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").trim();
+        const title = titleHtml
+          .replace(/<[^>]*>/g, "")
+          .replace(/&amp;/g, "&")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .trim();
 
         // Get snippet from next row
         let snippet = "";
         if (i + 1 < allRows.length) {
           const nextRow = allRows[i + 1];
-          const snippetText = nextRow.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").trim();
-          // Skip if it's just a URL or a number
+          const snippetText = nextRow
+            .replace(/<[^>]*>/g, "")
+            .replace(/&amp;/g, "&")
+            .replace(/&nbsp;/g, " ")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .trim();
           if (snippetText && !snippetText.startsWith("www.") && !snippetText.startsWith("http") && snippetText.length > 20) {
             snippet = snippetText;
           }
@@ -285,9 +300,58 @@ async function searchDuckDuckGoLite(query: string): Promise<any[]> {
         }
       }
 
+      // Method 2: If no <tr> results, try finding all links with uddg=
+      if (results.length === 0) {
+        const allLinks = html.match(/<a[^>]+href="([^"]*(?:uddg=)[^"]*)"[^>]*>([\s\S]*?)<\/a>/g) || [];
+        for (const linkHtml of allLinks) {
+          const lm = linkHtml.match(/href="([^"]*(?:uddg=)[^"]*)"[^>]*>([\s\S]*?)<\/a>/);
+          if (!lm) continue;
+
+          let decodedUrl = "";
+          try {
+            const uddgMatch = lm[1].match(/uddg=([^&]+)/);
+            if (uddgMatch) decodedUrl = decodeURIComponent(uddgMatch[1]);
+          } catch {}
+
+          if (!decodedUrl || decodedUrl.includes("duckduckgo.com")) continue;
+
+          const title = lm[2]
+            .replace(/<[^>]*>/g, "")
+            .replace(/&amp;/g, "&")
+            .replace(/&nbsp;/g, " ")
+            .trim();
+
+          if (title && title.length > 5) {
+            results.push({ url: decodedUrl, title, snippet: "", imageUrl: "" });
+          }
+        }
+      }
+
+      // Method 3: Try finding direct links to shopping domains
+      if (results.length === 0) {
+        const shoppingDomains = [
+          "amazon.com", "aliexpress.com", "shein.com", "temu.com",
+          "tiktok.com", "mercadolibre.com", "ebay.com", "walmart.com",
+        ];
+        
+        const allHrefs = html.match(/href="(https?:\/\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/g) || [];
+        for (const linkHtml of allHrefs) {
+          const hm = linkHtml.match(/href="(https?:\/\/([^"]*))"[^>]*>([\s\S]*?)<\/a>/);
+          if (!hm) continue;
+          
+          const url = hm[1].replace(/&amp;/g, "&");
+          const title = hm[3].replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ").trim();
+          
+          if (title && title.length > 10 && shoppingDomains.some(d => url.includes(d))) {
+            results.push({ url, title, snippet: "", imageUrl: "" });
+          }
+        }
+      }
+
+      console.log("[Search] DDG Lite found", results.length, "results for:", term);
       if (results.length > 0) break;
     } catch (e) {
-      console.error("[Search] DDG Lite search error for term:", term, e);
+      console.error("[Search] DDG Lite error for term:", term, e);
       continue;
     }
   }
