@@ -42,6 +42,33 @@ interface CubaProduct {
 }
 
 export async function POST(request: NextRequest) {
+
+// Debug endpoint to test Bing from Render
+export async function GET() {
+  try {
+    const q = "panel solar";
+    const encoded = encodeURIComponent(q + " Cuba precio venta");
+    const resp = await fetch(`https://www.bing.com/search?q=${encoded}&count=5&setlang=es&cc=cu`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "es-ES,es;q=0.9",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    const html = await resp.text();
+    const blocks = html.split('<li class="b_algo"');
+    return NextResponse.json({
+      status: resp.status,
+      htmlLength: html.length,
+      blockCount: blocks.length - 1,
+      firstBlock: blocks.length > 1 ? blocks[1].substring(0, 500) : "none",
+    });
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message?.substring(0, 200) });
+  }
+}
+
+export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => null);
     if (!body) return NextResponse.json({ error: "Error" }, { status: 400 });
@@ -61,8 +88,11 @@ export async function POST(request: NextRequest) {
     try {
       rawResults = await searchBing(q);
       console.log("[Finder] Bing returned:", rawResults.length);
+      if (rawResults.length > 0) {
+        console.log("[Finder] Sample:", JSON.stringify(rawResults[0]).substring(0, 200));
+      }
     } catch (e: any) {
-      console.log("[Finder] Bing failed:", e.message?.substring(0, 60));
+      console.log("[Finder] Bing failed:", e.message?.substring(0, 200));
     }
 
     // === METHOD 2: SDK web_search (works from internal network) ===
