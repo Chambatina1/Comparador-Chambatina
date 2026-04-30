@@ -48,14 +48,20 @@ export async function POST(request: NextRequest) {
     let products: CubaProduct[] = [];
     let sdkAvailable = false;
 
-    // === METHOD 1: Try SDK web_search (works from internal network) ===
+    // === METHOD 1: Try SDK web_search with 5s connection timeout ===
     try {
       const ZAI = (await import("z-ai-web-dev-sdk")).default;
       const zai = new ZAI(ZAI_CONFIG);
       console.log("[CubaFinder] SDK direct init OK, trying web_search...");
-      products = await searchWithSDK(zai, searchQuery);
-      sdkAvailable = true;
-      console.log("[CubaFinder] SDK search returned:", products.length);
+      // Race: if SDK search takes > 5s, skip it
+      products = await Promise.race([
+        searchWithSDK(zai, searchQuery),
+        new Promise<CubaProduct[]>((resolve) => setTimeout(() => resolve([]), 5000)),
+      ]);
+      if (products.length > 0) {
+        sdkAvailable = true;
+        console.log("[CubaFinder] SDK search returned:", products.length);
+      }
     } catch (e: any) {
       console.log("[CubaFinder] SDK not available:", e.message?.substring(0, 80));
     }
@@ -125,35 +131,31 @@ export async function POST(request: NextRequest) {
 
 // ===== SDK WEB SEARCH =====
 async function searchWithSDK(zai: any, query: string): Promise<CubaProduct[]> {
+  // Fewer queries, more focused on Facebook Cuba groups
   const searchQueries = [
     `${query} Cuba precio venta Facebook`,
-    `${query} "Ventas La Habana" OR "Ventas Pinar" OR "Ventas Holguin" precio`,
-    `${query} "Ventas Villa Clara" OR "Ventas Camaguey" OR "Ventas Santiago" precio`,
-    `${query} "Ventas Matanzas" OR "Ventas Granma" OR "Ventas Las Tunas" precio`,
-    `${query} "Ventas Ciego" OR "Ventas Artemisa" OR "Ventas Sancti" precio`,
-    `${query} Revolico Cuba precio`,
-    `${query} Bachecubano Cuba venta`,
-    `${query} Cuba marketplace compra venta USD`,
+    `${query} "Ventas La Habana" OR "Ventas Pinar" OR "Ventas Holguin"`,
+    `${query} "Ventas Villa Clara" OR "Ventas Camaguey" OR "Ventas Santiago"`,
   ];
 
   let allResults: any[] = [];
 
-  const batchSize = 3;
-  for (let i = 0; i < searchQueries.length; i += batchSize) {
-    const batch = searchQueries.slice(i, i + batchSize);
-    const results = await Promise.allSettled(
-      batch.map(async (q) => {
-        try {
-          const r = await zai.functions.invoke("web_search", { query: q, num: 8 });
-          return r || [];
-        } catch {
-          return [];
-        }
-      })
-    );
-    for (const r of results) {
-      if (r.status === "fulfilled" && Array.isArray(r.value)) allResults.push(...r.value);
-    }
+  // Run all 3 in parallel with timeout
+  const results = await Promise.allSettled(
+    searchQueries.map(async (q) => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const r = await zai.functions.invoke("web_search", { query: q, num: 10 });
+        clearTimeout(timeout);
+        return r || [];
+      } catch {
+        return [];
+      }
+    })
+  );
+  for (const r of results) {
+    if (r.status === "fulfilled" && Array.isArray(r.value)) allResults.push(...r.value);
   }
 
   // Deduplicate
@@ -189,35 +191,40 @@ async function searchDuckDuckGoHTML(query: string): Promise<CubaProduct[]> {
   const searches = [
     `${query} Cuba precio venta`,
     `${query} "Ventas" Cuba Facebook`,
-    `${query} Revolico Cuba`,
   ];
 
   let allHtmlResults: any[] = [];
 
-  for (const q of searches) {
-    try {
-      const encoded = encodeURIComponent(q);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
+  // Run in parallel with short timeout
+  const results = await Promise.allSettled(
+    searches.map(async (q) => {
+      try {
+        const encoded = encodeURIComponent(q);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
 
-      const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml",
-          "Accept-Language": "es-ES,es;q=0.9",
-        },
-        signal: controller.signal,
-      });
+        const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "es-ES,es;q=0.9",
+          },
+          signal: controller.signal,
+        });
 
-      clearTimeout(timeout);
-      const html = await resp.text();
+        clearTimeout(timeout);
+        const html = await resp.text();
+        const parsed = parseDDGResults(html);
+        return parsed;
+      } catch (e: any) {
+        console.log("[CubaFinder] DDG search failed:", e.message?.substring(0, 50));
+        return [];
+      }
+    })
+  );
 
-      // Parse results from DDG HTML
-      const results = parseDDGResults(html);
-      allHtmlResults.push(...results);
-    } catch (e: any) {
-      console.log("[CubaFinder] DDG search failed:", e.message?.substring(0, 50));
-    }
+  for (const r of results) {
+    if (r.status === "fulfilled" && Array.isArray(r.value)) allHtmlResults.push(...r.value);
   }
 
   // Deduplicate
