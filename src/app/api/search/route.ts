@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// SDK direct config (no config file needed)
 const ZAI_CONFIG = {
   baseUrl: process.env.ZAI_BASE_URL || "http://172.25.136.193:8080/v1",
   apiKey: process.env.ZAI_API_KEY || "Z.ai",
@@ -11,6 +10,20 @@ const ZAI_CONFIG = {
   token: process.env.ZAI_TOKEN || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiOTgxYmU5ZDctNzAyOC00ODEzLThhYmYtZDc3NzNkMjY1ZTc4IiwiY2hhdF9pZCI6ImNoYXQtN2ExN2JiYmEtZjVmNC00OTgyLTk4OWMtYWQwMDQwYTg2MDY2IiwicGxhdGZvcm0iOiJ6YWkifQ.0um_1S3rkuzM37d4zAXQ3qk-yN3dhtTSmsF0ppmd8Xk",
   userId: process.env.ZAI_USER_ID || "981be9d7-7028-4813-8abf-d7773d265e78",
 };
+
+// Keywords that indicate a Cuba marketplace listing
+const CUBA_MARKETPLACE_KEYWORDS = [
+  "cuba", "cubano", "cubana", "habana", "pinar", "holguin", "santiago",
+  "villa clara", "camaguey", "matanzas", "revolico", "bachecubano",
+  "ventas", "1cuba", "timbri", "dimecuba", "cibercafe",
+];
+
+interface RawResult {
+  title: string;
+  snippet: string;
+  url: string;
+  host: string;
+}
 
 interface CubaProduct {
   id: string;
@@ -30,62 +43,93 @@ interface CubaProduct {
 
 export async function POST(request: NextRequest) {
   try {
-    let body: any;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Error al leer la solicitud" }, { status: 400 });
-    }
+    const body = await request.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "Error" }, { status: 400 });
 
     const query = body?.query || "";
-    console.log("[CubaFinder] Query:", query);
-
     if (!query || query.trim().length < 2) {
       return NextResponse.json({ error: "Escribe el producto que buscas" }, { status: 400 });
     }
 
-    const searchQuery = query.trim();
-    let products: CubaProduct[] = [];
-    let sdkAvailable = false;
+    const q = query.trim();
+    console.log("[Finder] Search:", q);
 
-    // === METHOD 1: Try SDK web_search with 5s connection timeout ===
+    let rawResults: RawResult[] = [];
+    let aiUsed = false;
+
+    // === METHOD 1: Bing Search (works from cloud) ===
     try {
-      const ZAI = (await import("z-ai-web-dev-sdk")).default;
-      const zai = new ZAI(ZAI_CONFIG);
-      console.log("[CubaFinder] SDK direct init OK, trying web_search...");
-      // Race: if SDK search takes > 5s, skip it
-      products = await Promise.race([
-        searchWithSDK(zai, searchQuery),
-        new Promise<CubaProduct[]>((resolve) => setTimeout(() => resolve([]), 5000)),
-      ]);
-      if (products.length > 0) {
-        sdkAvailable = true;
-        console.log("[CubaFinder] SDK search returned:", products.length);
-      }
+      rawResults = await searchBing(q);
+      console.log("[Finder] Bing returned:", rawResults.length);
     } catch (e: any) {
-      console.log("[CubaFinder] SDK not available:", e.message?.substring(0, 80));
+      console.log("[Finder] Bing failed:", e.message?.substring(0, 60));
     }
 
-    // === METHOD 2: Fallback to DuckDuckGo HTML scraping ===
-    if (products.length === 0) {
-      console.log("[CubaFinder] Falling back to DuckDuckGo HTML...");
-      try {
-        products = await searchDuckDuckGoHTML(searchQuery);
-        console.log("[CubaFinder] DDG returned:", products.length);
-      } catch (e: any) {
-        console.error("[CubaFinder] DDG error:", e.message?.substring(0, 80));
-      }
-    }
-
-    // === METHOD 3: Try AI extraction if we have SDK ===
-    if (sdkAvailable && products.length > 0) {
+    // === METHOD 2: SDK web_search (works from internal network) ===
+    if (rawResults.length < 5) {
       try {
         const ZAI = (await import("z-ai-web-dev-sdk")).default;
         const zai = new ZAI(ZAI_CONFIG);
-        products = await extractWithAI(zai, products, searchQuery);
-        console.log("[CubaFinder] AI extraction done, results:", products.length);
+        const sdkResults = await Promise.race([
+          searchSDK(zai, q),
+          new Promise<RawResult[]>((r) => setTimeout(() => r([]), 4000)),
+        ]);
+        if (sdkResults.length > 0) {
+          rawResults = [...rawResults, ...sdkResults];
+          aiUsed = true;
+          console.log("[Finder] SDK added:", sdkResults.length);
+        }
       } catch (e: any) {
-        console.log("[CubaFinder] AI extraction failed:", e.message?.substring(0, 80));
+        console.log("[Finder] SDK failed:", e.message?.substring(0, 60));
+      }
+    }
+
+    // Deduplicate
+    const seen = new Set<string>();
+    rawResults = rawResults.filter((r) => {
+      if (!r.url || seen.has(r.url)) return false;
+      seen.add(r.url);
+      return true;
+    });
+
+    console.log("[Finder] Total raw:", rawResults.length);
+
+    // Filter: keep only Cuba-relevant results
+    const cubaResults = rawResults.filter((r) => isCubaRelevant(r, q));
+    console.log("[Finder] Cuba-relevant:", cubaResults.length);
+
+    // Convert to CubaProduct
+    let products: CubaProduct[] = cubaResults.map((r, i) => ({
+      id: `r-${i}`,
+      name: extractProductName(r, q),
+      price: extractPrice(r.snippet + " " + r.title),
+      priceFormatted: "",
+      currency: extractCurrency(r.snippet + " " + r.title),
+      url: r.url,
+      phone: extractPhone(r.snippet + " " + r.title),
+      province: extractProvince(r),
+      municipality: "",
+      group: extractGroup(r),
+      publishDate: "",
+      isBestPrice: false,
+      notes: r.snippet.substring(0, 200),
+    }));
+
+    // Format prices
+    products = products.map((p) => ({
+      ...p,
+      priceFormatted: p.price > 0 ? `$${p.price.toLocaleString("es-CU")} ${p.currency}` : "Ver publicación",
+    }));
+
+    // === AI Enhancement (if SDK available) ===
+    if (aiUsed && products.length > 0) {
+      try {
+        const ZAI = (await import("z-ai-web-dev-sdk")).default;
+        const zai = new ZAI(ZAI_CONFIG);
+        products = await enhanceWithAI(zai, products, rawResults, q);
+        console.log("[Finder] AI enhanced");
+      } catch {
+        console.log("[Finder] AI enhancement failed");
       }
     }
 
@@ -106,226 +150,169 @@ export async function POST(request: NextRequest) {
     const provinces = [...new Set(products.filter((p) => p.province).map((p) => p.province))];
 
     return NextResponse.json({
-      query: searchQuery,
+      query: q,
       results: sorted,
       totalResults: sorted.length,
       stats: {
         provinces,
         withPhone: products.filter((p) => p.phone).length,
-        withDate: products.filter((p) => p.publishDate).length,
+        withDate: 0,
         pricedCount: priced.length,
         minPrice: priced.length > 0 ? Math.min(...priced.map((p) => p.price)) : 0,
-        method: sdkAvailable ? "SDK + AI" : "DuckDuckGo",
+        method: aiUsed ? "SDK + Bing + IA" : "Bing",
       },
     });
   } catch (error) {
-    console.error("[CubaFinder] Fatal error:", error);
+    console.error("[Finder] Fatal:", error);
     return NextResponse.json({
-      query: "",
-      results: [],
-      totalResults: 0,
+      query: "", results: [], totalResults: 0,
       stats: { provinces: [], withPhone: 0, withDate: 0, pricedCount: 0, minPrice: 0, method: "error" },
     });
   }
 }
 
-// ===== SDK WEB SEARCH =====
-async function searchWithSDK(zai: any, query: string): Promise<CubaProduct[]> {
-  // Fewer queries, more focused on Facebook Cuba groups
-  const searchQueries = [
-    `${query} Cuba precio venta Facebook`,
-    `${query} "Ventas La Habana" OR "Ventas Pinar" OR "Ventas Holguin"`,
-    `${query} "Ventas Villa Clara" OR "Ventas Camaguey" OR "Ventas Santiago"`,
+// ===== BING SEARCH =====
+async function searchBing(query: string): Promise<RawResult[]> {
+  const queries = [
+    `${query} Cuba precio venta`,
+    `${query} "Ventas La Habana" OR "Ventas Pinar" OR "Ventas Holguin" OR "Ventas Villa Clara" OR "Ventas Camaguey"`,
   ];
 
-  let allResults: any[] = [];
+  const allResults: RawResult[] = [];
 
-  // Run all 3 in parallel with timeout
   const results = await Promise.allSettled(
-    searchQueries.map(async (q) => {
+    queries.map(async (q) => {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
-        const r = await zai.functions.invoke("web_search", { query: q, num: 10 });
-        clearTimeout(timeout);
-        return r || [];
+        const encoded = encodeURIComponent(q);
+        const resp = await fetch(`https://www.bing.com/search?q=${encoded}&count=20&setlang=es`, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+          },
+          signal: AbortSignal.timeout(12000),
+        });
+        const html = await resp.text();
+        return parseBingHTML(html);
       } catch {
         return [];
       }
     })
   );
+
   for (const r of results) {
     if (r.status === "fulfilled" && Array.isArray(r.value)) allResults.push(...r.value);
   }
 
-  // Deduplicate
-  const seen = new Set<string>();
-  const unique = allResults.filter((r) => {
-    if (!r.url || seen.has(r.url)) return false;
-    seen.add(r.url);
-    return true;
-  });
-
-  return unique.map((r, i) => ({
-    id: `sdk-${i}`,
-    name: r.name || "",
-    price: 0,
-    priceFormatted: "Ver publicación",
-    currency: "USD",
-    url: r.url || "#",
-    phone: "",
-    province: "",
-    municipality: "",
-    group: extractGroupFromUrl(r.url || "", r.name || ""),
-    publishDate: r.date || "",
-    isBestPrice: false,
-    notes: r.snippet ? r.snippet.substring(0, 200) : "",
-    _rawTitle: r.name,
-    _rawSnippet: r.snippet,
-    _rawHost: r.host_name,
-  }));
+  return allResults;
 }
 
-// ===== DUCKDUCKGO HTML SCRAPING =====
-async function searchDuckDuckGoHTML(query: string): Promise<CubaProduct[]> {
-  const searches = [
-    `${query} Cuba precio venta`,
-    `${query} "Ventas" Cuba Facebook`,
-  ];
+function parseBingHTML(html: string): RawResult[] {
+  const results: RawResult[] = [];
 
-  let allHtmlResults: any[] = [];
+  // Bing results are in <li class="b_algo"> blocks
+  // Each has an <h2><a href="URL">title</a></h2> and <p class="b_lineclamp...">snippet</p>
+  const blocks = html.split(/<li class="b_algo"/);
 
-  // Run in parallel with short timeout
-  const results = await Promise.allSettled(
-    searches.map(async (q) => {
-      try {
-        const encoded = encodeURIComponent(q);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-
-        const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "es-ES,es;q=0.9",
-          },
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeout);
-        const html = await resp.text();
-        const parsed = parseDDGResults(html);
-        return parsed;
-      } catch (e: any) {
-        console.log("[CubaFinder] DDG search failed:", e.message?.substring(0, 50));
-        return [];
-      }
-    })
-  );
-
-  for (const r of results) {
-    if (r.status === "fulfilled" && Array.isArray(r.value)) allHtmlResults.push(...r.value);
-  }
-
-  // Deduplicate
-  const seen = new Set<string>();
-  return allHtmlResults.filter((r) => {
-    if (!r.url || seen.has(r.url)) return false;
-    seen.add(r.url);
-    return true;
-  });
-}
-
-function parseDDGResults(html: string): any[] {
-  const results: any[] = [];
-
-  // DDG HTML results have this structure:
-  // <a class="result__a" href="...">title</a>
-  // <a class="result__snippet" href="...">snippet</a>
-  const resultBlocks = html.split('class="result__body"');
-  for (const block of resultBlocks.slice(1)) {
+  for (const block of blocks.slice(1)) {
     try {
-      const titleMatch = block.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/);
-      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
-      const urlMatch = block.match(/class="result__url"[^>]*>([\s\S]*?)<\/a>/);
-
+      // Extract title and URL from <h2><a href="URL">title</a></h2>
+      const titleMatch = block.match(/<h2[^>]*>\s*<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>\s*<\/h2>/);
       if (!titleMatch) continue;
 
-      const title = titleMatch[1].replace(/<[^>]*>/g, "").trim();
-      const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, "").trim() : "";
-      let url = "";
-
-      if (urlMatch) {
-        url = urlMatch[1].replace(/<[^>]*>/g, "").trim();
-      } else {
-        // Try to find URL in the first link
-        const hrefMatch = block.match(/href="(https?:\/\/[^"]+)"/);
-        if (hrefMatch) url = hrefMatch[1];
-      }
-
-      // Skip non-relevant results
+      const rawUrl = titleMatch[1];
+      let title = titleMatch[2].replace(/<[^>]*>/g, "").trim();
       if (!title || title.length < 5) continue;
 
-      results.push({ title, snippet, url });
+      // Extract snippet
+      let snippet = "";
+      const snippetMatch = block.match(/<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/);
+      if (snippetMatch) {
+        snippet = snippetMatch[1].replace(/<[^>]*>/g, "").trim();
+      }
+
+      // Extract URL (Bing redirects through bing.com/ck/a?...&u=ENCODED_REAL_URL)
+      let realUrl = rawUrl;
+      const uMatch = rawUrl.match(/[&?]u=([a-zA-Z0-9_-]+)/);
+      if (uMatch) {
+        try { realUrl = Buffer.from(uMatch[1], "base64").toString("utf-8"); } catch {}
+      }
+
+      // Extract host
+      let host = "";
+      try { host = new URL(realUrl).hostname.replace("www.", ""); } catch {}
+
+      // Skip non-Cuba results early based on host
+      if (host && !isLikelyCubaHost(host, title, snippet)) continue;
+
+      results.push({ title, snippet, url: realUrl, host });
     } catch {
       continue;
     }
   }
 
-  return results.map((r, i) => ({
-    id: `ddg-${i}`,
-    name: r.title,
-    price: 0,
-    priceFormatted: "Ver publicación",
-    currency: "USD",
-    url: r.url || "#",
-    phone: "",
-    province: "",
-    municipality: "",
-    group: extractGroupFromUrl(r.url, r.title),
-    publishDate: "",
-    isBestPrice: false,
-    notes: r.snippet ? r.snippet.substring(0, 200) : "",
-    _rawTitle: r.title,
-    _rawSnippet: r.snippet,
-    _rawHost: extractHost(r.url),
-  }));
+  return results;
 }
 
-// ===== AI EXTRACTION =====
-async function extractWithAI(zai: any, rawProducts: CubaProduct[], query: string): Promise<CubaProduct[]> {
-  const contextText = rawProducts.slice(0, 15).map((r, i) => {
-    return `[${i + 1}]
-Título: ${r._rawTitle || r.name}
-Descripción: ${r._rawSnippet || r.notes}
-URL: ${r.url}
-Sitio: ${r._rawHost || ""}
-Grupo: ${r.group}`;
-  }).join("\n\n");
+function isLikelyCubaHost(host: string, title: string, snippet: string): boolean {
+  const text = `${host} ${title} ${snippet}`.toLowerCase();
+  // Always allow known Cuba marketplaces
+  if (host.includes("revolico") || host.includes("bachecubano") || host.includes("1cuba")) return true;
+  if (host.includes("timbri") || host.includes("dimecuba") || host.includes("cibercafe")) return true;
+  if (host.includes("facebook.com") || host.includes("fb.com")) return true;
+  if (host.includes(".cu")) return true;
+  // Check for Cuba keywords in text
+  for (const kw of CUBA_MARKETPLACE_KEYWORDS) {
+    if (text.includes(kw)) return true;
+  }
+  return false;
+}
 
-  const prompt = `Eres un extractor de datos de ventas en Cuba, especialmente grupos de Facebook tipo "Ventas La Habana", "Ventas Pinar", etc.
+// ===== SDK WEB SEARCH =====
+async function searchSDK(zai: any, query: string): Promise<RawResult[]> {
+  const queries = [
+    `${query} Cuba precio venta Facebook`,
+    `${query} "Ventas La Habana" OR "Ventas Pinar" OR "Ventas Holguin"`,
+  ];
 
-PRODUCTO BUSCADO: "${query}"
+  const allResults: RawResult[] = [];
+  const results = await Promise.allSettled(
+    queries.map(async (q) => {
+      try {
+        const r = await zai.functions.invoke("web_search", { query: q, num: 10 });
+        return (r || []).map((item: any) => ({
+          title: item.name || "",
+          snippet: item.snippet || "",
+          url: item.url || "",
+          host: item.host_name || "",
+        }));
+      } catch { return []; }
+    })
+  );
 
-PUBLICACIONES ENCONTRADAS:
+  for (const r of results) {
+    if (r.status === "fulfilled" && Array.isArray(r.value)) allResults.push(...r.value);
+  }
+  return allResults;
+}
+
+// ===== AI ENHANCEMENT =====
+async function enhanceWithAI(zai: any, products: CubaProduct[], raw: RawResult[], query: string): Promise<CubaProduct[]> {
+  const contextText = raw.slice(0, 15).map((r, i) =>
+    `[${i + 1}] Título: ${r.title}\nURL: ${r.url}\nDescripción: ${r.snippet}\nSitio: ${r.host}`
+  ).join("\n\n");
+
+  const prompt = `Analiza publicaciones de venta en Cuba para "${query}".
+PUBLICACIONES:
 ${contextText}
 
-INSTRUCCIONES:
-- Analiza cada publicación y determina si es relevante para "${query}"
-- Extrae PRECIO (número), TELEFONO (+53 5xxxxxxx), PROVINCIA, GRUPO DE FACEBOOK
-- Los grupos "Ventas [Provincia]" son de Cuba
-- Teléfonos cubanos: 8 dígitos, empiezan con 5
-- "$150" o "150usd" = price: 150, currency: "USD"
-- "150 CUP" o "150 pesos" = price: 150, currency: "CUP"
-- NO inventes datos que no aparezcan
-- Si la publicación NO es relevante para venta del producto, exclúyela
-
-Responde SOLO con JSON:
-{"products":[{"name":"","price":0,"currency":"USD","phone":"","province":"","municipality":"","group":"","publishDate":"","url":"","notes":""}]}`;
+Extrae de cada publicación RELEVANTE:
+- name, price (número), currency (USD/CUP), phone (+53 5xxxxxxx), province, group, notes
+Solo JSON: {"products":[{"name":"","price":0,"currency":"USD","phone":"","province":"","group":"","url":"","notes":""}]}`;
 
   const ai = await zai.chat.completions.create({
     messages: [
-      { role: "system", content: "Extrae datos de ventas Cuba. Solo JSON. No inventes." },
+      { role: "system", content: "Extrae datos de ventas Cuba. Solo JSON." },
       { role: "user", content: prompt },
     ],
   });
@@ -336,17 +323,17 @@ Responde SOLO con JSON:
     parsed = JSON.parse(content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
   } catch {
     const m = content.match(/\{[\s\S]*\}/);
-    if (m) parsed = JSON.parse(m[0]);
-    else return rawProducts;
+    if (m) try { parsed = JSON.parse(m[0]); } catch { return products; }
+    else return products;
   }
 
-  if (!parsed.products || parsed.products.length === 0) return rawProducts;
+  if (!parsed.products?.length) return products;
 
   return parsed.products.map((p: any) => {
     const price = typeof p.price === "number" ? p.price : parseFloat(String(p.price).replace(/[^\d.]/g, "")) || 0;
     const currency = String(p.currency || "USD").toUpperCase();
     return {
-      id: `ai-${hashStr(p.url + p.name + (p.phone || ""))}`,
+      id: `ai-${hashStr(p.url + p.name)}`,
       name: String(p.name || "").substring(0, 150),
       price,
       priceFormatted: price > 0 ? `$${price.toLocaleString("es-CU")} ${currency}` : "Preguntar",
@@ -354,51 +341,138 @@ Responde SOLO con JSON:
       url: String(p.url || "#"),
       phone: formatPhone(String(p.phone || "")),
       province: String(p.province || "").trim(),
-      municipality: String(p.municipality || "").trim(),
+      municipality: "",
       group: String(p.group || "").trim(),
-      publishDate: String(p.publishDate || "").trim(),
+      publishDate: "",
       isBestPrice: false,
       notes: String(p.notes || "").trim(),
     };
   });
 }
 
-// ===== HELPERS =====
-function extractGroupFromUrl(url: string, title: string): string {
-  const text = `${url} ${title}`.toLowerCase();
-  const cubanGroups = [
-    "Ventas La Habana", "Ventas Pinar", "Ventas Pinar del Río", "Ventas Artemisa",
-    "Ventas Mayabeque", "Ventas Matanzas", "Ventas Cienfuegos", "Ventas Villa Clara",
-    "Ventas Sancti Spíritus", "Ventas Ciego de Ávila", "Ventas Camagüey",
-    "Ventas Las Tunas", "Ventas Holguín", "Ventas Granma", "Ventas Santiago de Cuba",
-    "Ventas Guantánamo", "Ventas Cárdenas", "Ventas Santa Clara", "Ventas Bayamo",
-    "Ventas Manzanillo", "Ventas Morón", "Ventas Gibara", "Ventas Puerto Padre",
-    "Ventas Contramaestre", "Ventas Trinidad", "Ventas Baracoa", "Ventas Moa",
+// ===== FILTERING =====
+function isCubaRelevant(r: RawResult, query: string): boolean {
+  const text = `${r.title} ${r.snippet} ${r.url} ${r.host}`.toLowerCase();
+  const qLower = query.toLowerCase();
+
+  // Must mention the product somehow OR be from a Cuba marketplace
+  const mentionsProduct = text.includes(qLower.split(" ")[0]) || r.title.toLowerCase().includes(qLower.split(" ")[0]);
+  const isCubaMarketplace = r.host.includes("revolico") || r.host.includes("bachecubano") ||
+    r.host.includes("1cuba") || r.host.includes("timbri") || r.host.includes("dimecuba") ||
+    r.host.includes("facebook.com") || r.host.includes("fb.com");
+
+  if (isCubaMarketplace && mentionsProduct) return true;
+
+  // Must contain Cuba keywords
+  let cubaScore = 0;
+  for (const kw of ["cuba", "cubano", "cubana", "habana", "pinar", "holguin", "santiago",
+    "villa clara", "camaguey", "matanzas", "ventas", "revolico", "usd", "cup"]) {
+    if (text.includes(kw)) cubaScore++;
+  }
+  return cubaScore >= 2 && mentionsProduct;
+}
+
+// ===== EXTRACTION HELPERS =====
+function extractProductName(r: RawResult, query: string): string {
+  // Use title, clean it up
+  let name = r.title;
+  // Remove common suffixes
+  name = name.replace(/ - .*$/, "").replace(/ \| .*$/, "").replace(/:.*$/, "");
+  return name.substring(0, 120) || query;
+}
+
+function extractPrice(text: string): number {
+  // Try "$150", "150usd", "150 USD", "150$"
+  const patterns = [
+    /\$\s*([\d,]+\.?\d*)/g,
+    /([\d,]+\.?\d*)\s*(?:usd|USD|dolar|dólar)/g,
+    /([\d,]+\.?\d*)\s*(?:cup|CUP|pesos?)/g,
+    /(?:precio|venta|cobro)\s*:?\s*\$?\s*([\d,]+\.?\d*)/gi,
   ];
 
-  for (const group of cubanGroups) {
-    if (text.includes(group.toLowerCase())) return group;
+  for (const pat of patterns) {
+    pat.lastIndex = 0;
+    const match = pat.exec(text);
+    if (match) {
+      const num = parseFloat(match[1].replace(/,/g, ""));
+      if (num > 0 && num < 1000000) return num;
+    }
   }
+  return 0;
+}
 
-  if (text.includes("revolico")) return "Revolico";
-  if (text.includes("bachecubano")) return "BacheCubano";
-  if (text.includes("1cuba")) return "1Cuba";
-  if (text.includes("timbri")) return "Timbri";
-  if (text.includes("facebook.com/groups")) return "Grupo de Facebook";
+function extractCurrency(text: string): string {
+  if (/cup|pesos?/i.test(text)) return "CUP";
+  return "USD";
+}
 
-  const host = extractHost(url);
-  if (host) return host;
+function extractPhone(text: string): string {
+  // Cuban phones: +53 5xxxxxxx, 5xxxxxxx, 53 5xxxxxxx
+  const patterns = [
+    /\+53\s*[56]\d{7}/g,
+    /53\s*[56]\d{7}/g,
+    /(?:tel(?:éfono|efono)?|celular|whatsapp|wa|contacto)\s*:?\s*([56]\d{7})/gi,
+  ];
 
+  for (const pat of patterns) {
+    pat.lastIndex = 0;
+    const match = pat.exec(text);
+    if (match) {
+      let phone = match[1] || match[0];
+      phone = phone.replace(/[^\d+]/g, "");
+      if (phone.length === 8 && phone.startsWith("5")) phone = "+53 " + phone;
+      else if (phone.length === 10 && phone.startsWith("53")) phone = "+" + phone;
+      return phone;
+    }
+  }
   return "";
 }
 
-function extractHost(url: string): string {
-  try {
-    const u = new URL(url);
-    return u.hostname.replace("www.", "");
-  } catch {
-    return "";
+function extractProvince(r: RawResult): string {
+  const text = `${r.title} ${r.snippet} ${r.url}`.toLowerCase();
+  const provinces: [string, string][] = [
+    ["la habana", "La Habana"], ["havana", "La Habana"],
+    ["pinar del río", "Pinar del Río"], ["pinar del rio", "Pinar del Río"], ["pinar", "Pinar del Río"],
+    ["artemisa", "Artemisa"], ["mayabeque", "Mayabeque"],
+    ["matanzas", "Matanzas"], ["cienfuegos", "Cienfuegos"],
+    ["villa clara", "Villa Clara"], ["santa clara", "Villa Clara"],
+    ["sancti spíritus", "Sancti Spíritus"], ["sancti spiritus", "Sancti Spíritus"],
+    ["ciego de ávila", "Ciego de Ávila"], ["ciego de avila", "Ciego de Ávila"],
+    ["camagüey", "Camagüey"], ["camaguey", "Camagüey"],
+    ["las tunas", "Las Tunas"], ["holguín", "Holguín"], ["holguin", "Holguín"],
+    ["granma", "Granma"], ["bayamo", "Granma"], ["manzanillo", "Granma"],
+    ["santiago de cuba", "Santiago de Cuba"], ["santiago", "Santiago de Cuba"],
+    ["guantánamo", "Guantánamo"], ["guantanamo", "Guantánamo"],
+  ];
+
+  for (const [key, value] of provinces) {
+    if (text.includes(key)) return value;
   }
+  return "";
+}
+
+function extractGroup(r: RawResult): string {
+  const text = `${r.title} ${r.snippet} ${r.url}`.toLowerCase();
+
+  if (r.host.includes("revolico")) return "Revolico";
+  if (r.host.includes("bachecubano")) return "BacheCubano";
+  if (r.host.includes("1cuba")) return "1Cuba";
+  if (r.host.includes("timbri")) return "Timbri";
+  if (r.host.includes("dimecuba")) return "DimeCuba";
+  if (r.host.includes("facebook.com/groups")) {
+    const groupMatch = r.url.match(/groups\/([^/]+)/);
+    if (groupMatch) return "Grupo FB: " + groupMatch[1];
+    return "Grupo de Facebook";
+  }
+
+  // Check for "Ventas [Province]" in title
+  const ventMatch = text.match(/ventas\s+([a-záéíóúñü\s]+)/);
+  if (ventMatch) {
+    const groupName = ventMatch[1].trim().split(" ").slice(0, 3).join(" ");
+    return "Ventas " + groupName.charAt(0).toUpperCase() + groupName.slice(1);
+  }
+
+  return r.host || "";
 }
 
 function formatPhone(phone: string): string {
@@ -412,9 +486,6 @@ function formatPhone(phone: string): string {
 
 function hashStr(str: string): string {
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i);
-    hash |= 0;
-  }
+  for (let i = 0; i < str.length; i++) { hash = (hash << 5) - hash + str.charCodeAt(i); hash |= 0; }
   return Math.abs(hash).toString(36);
 }
