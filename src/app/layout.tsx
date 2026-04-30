@@ -2,23 +2,24 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import { BottomNav } from "@/components/bottom-nav";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "CubaFinder — Buscador de ventas en grupos de Cuba",
+  title: "CubaFinder — Marketplace y Mipymes de Cuba",
   description:
-    "Busca productos en grupos de Facebook de toda Cuba. Encuentra el mejor precio, teléfono del vendedor, provincia y fecha de publicación. Ventas La Habana, Ventas Pinar, Ventas Holguín y más.",
+    "Busca productos, publica anuncios y encuentra mipymes en toda Cuba. Marketplace clasificado, directorio de negocios y buscador de ventas en grupos de Facebook.",
   keywords: [
-    "ventas Cuba", "grupos Facebook Cuba", "Ventas La Habana", "Ventas Pinar",
-    "mejor precio Cuba", "buscar productos Cuba", "Revolico",
-    "marketplace Cuba", "comprar vender Cuba", "teléfono vendedor",
+    "ventas Cuba", "marketplace Cuba", "mipymes Cuba", "comprar vender Cuba",
+    "grupos Facebook Cuba", "Ventas La Habana", "negocios Cuba", "directorios Cuba",
+    "Revolico", "teléfono vendedor",
   ],
   authors: [{ name: "CubaFinder" }],
   openGraph: {
-    title: "CubaFinder — Buscador de ventas en Cuba",
-    description: "Busca en grupos de Facebook de toda Cuba. Precio, teléfono, ubicación y fecha.",
+    title: "CubaFinder — Marketplace y Mipymes de Cuba",
+    description: "Busca productos, publica anuncios y encuentra mipymes en toda Cuba.",
     type: "website",
   },
 };
@@ -27,7 +28,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="es" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}>
-        {children}
+        <BottomNav />
+        <div className="pb-16 md:pb-0">{children}</div>
         <Toaster />
       </body>
     </html>
