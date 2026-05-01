@@ -454,19 +454,25 @@ export default function Home() {
                 </div>
               )}
 
-              {/* No results / Service saturated */}
-              {!isLoading && searchResult && (searchResult.totalResults === 0 || searchResult.stats.message) && (
+              {/* Web search warning (when local results exist but web search failed) */}
+              {!isLoading && searchResult && searchResult.totalResults > 0 && searchResult.stats.message && (
+                <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800 flex items-start gap-2">
+                  <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <span>Los resultados locales (Marketplace y Mipymes) se muestran abajo. La búsqueda web se reactivará pronto.</span>
+                </div>
+              )}
+
+              {/* No results at all */}
+              {!isLoading && searchResult && searchResult.totalResults === 0 && (
                 <div className="text-center py-16">
                   <div className="w-20 h-20 rounded-full bg-amber-50 flex items-center justify-center mx-auto mb-4">
                     <Search className="h-8 w-8 text-amber-400" />
                   </div>
                   <h3 className="text-lg font-semibold text-gray-800 mb-2">
-                    {searchResult.stats.message
-                      ? "Búsqueda temporalmente no disponible"
-                      : `No encontramos "${searchResult.query}"`}
+                    No encontramos "{searchResult.query}"
                   </h3>
                   <p className="text-sm text-muted-foreground mb-6 max-w-md mx-auto">
-                    El servicio de búsqueda está temporalmente saturado. Intenta de nuevo en unos minutos. Mientras tanto, puedes usar el Marketplace o el Catálogo de Mipymes.
+                    Intenta con otro término de búsqueda o publica tu oferta en el Marketplace.
                   </p>
                   <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
                     <Button
