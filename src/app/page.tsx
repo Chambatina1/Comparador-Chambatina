@@ -39,6 +39,7 @@ interface SearchResult {
     pricedCount: number;
     minPrice: number;
     method: string;
+    message?: string;
   };
 }
 
@@ -453,25 +454,31 @@ export default function Home() {
                 </div>
               )}
 
-              {/* No results */}
-              {!isLoading && searchResult && searchResult.totalResults === 0 && (
+              {/* No results / Service saturated */}
+              {!isLoading && searchResult && (searchResult.totalResults === 0 || searchResult.stats.message) && (
                 <div className="text-center py-16">
-                  <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                    <Search className="h-8 w-8 text-gray-300" />
+                  <div className="w-20 h-20 rounded-full bg-amber-50 flex items-center justify-center mx-auto mb-4">
+                    <Search className="h-8 w-8 text-amber-400" />
                   </div>
-                  <h3 className="text-lg font-semibold text-gray-800 mb-2">No encontramos &quot;{searchResult.query}&quot;</h3>
-                  <p className="text-sm text-muted-foreground mb-4 max-w-md mx-auto">
-                    No encontramos publicaciones de venta en Cuba para este producto.
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">
+                    {searchResult.stats.message
+                      ? "Búsqueda temporalmente no disponible"
+                      : `No encontramos "${searchResult.query}"`}
+                  </h3>
+                  <p className="text-sm text-muted-foreground mb-6 max-w-md mx-auto">
+                    El servicio de búsqueda está temporalmente saturado. Intenta de nuevo en unos minutos. Mientras tanto, puedes usar el Marketplace o el Catálogo de Mipymes.
                   </p>
-                  <div className="flex flex-col items-center gap-2 mb-6 max-w-sm mx-auto">
-                    <div className="flex items-start gap-2 text-xs text-muted-foreground bg-blue-50 border border-blue-100 rounded-lg p-3">
-                      <Info className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
-                      <span>Buscamos en grupos de Facebook como &quot;Ventas La Habana&quot;, &quot;Ventas Pinar&quot; y más. Los grupos privados no son accesibles desde la web. Intenta con palabras más específicas.</span>
-                    </div>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                    <Button
+                      onClick={() => searchInput && performSearch(searchInput)}
+                      className="bg-emerald-600 hover:bg-emerald-700"
+                    >
+                      <Search className="h-4 w-4 mr-2" /> Intentar de nuevo
+                    </Button>
+                    <Button variant="outline" onClick={goHome}>
+                      <ArrowLeft className="h-4 w-4 mr-2" /> Nueva búsqueda
+                    </Button>
                   </div>
-                  <Button onClick={goHome} className="bg-emerald-600 hover:bg-emerald-700">
-                    <Search className="h-4 w-4 mr-2" /> Nueva búsqueda
-                  </Button>
                 </div>
               )}
 
