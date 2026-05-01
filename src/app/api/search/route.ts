@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
       try {
         console.log("[API] Trying proxy:", proxyUrl);
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 30000);
+        const timeout = setTimeout(() => controller.abort(), 45000);
 
         const response = await fetch(`${proxyUrl}/search`, {
           method: "POST",
